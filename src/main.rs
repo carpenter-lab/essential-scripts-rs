@@ -1,0 +1,36 @@
+use clap::{Parser, Subcommand};
+
+mod aggregate;
+mod io;
+mod plate_reader;
+mod split;
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    #[command(flatten)]
+    Aggregate(aggregate::Commands),
+
+    #[command(flatten)]
+    Split(split::Commands),
+
+    #[command(flatten)]
+    ReformatPlateReaderData(plate_reader::Commands),
+}
+
+fn main() -> () {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Some(Commands::Aggregate(cmd)) => aggregate::handle_command(cmd),
+        Some(Commands::Split(cmd)) => split::handle_command(cmd),
+        Some(Commands::ReformatPlateReaderData(cmd)) => plate_reader::handle_command(cmd),
+        None => {}
+    }
+}

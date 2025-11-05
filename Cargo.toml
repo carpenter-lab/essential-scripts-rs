@@ -1,0 +1,23 @@
+[package]
+name = "essential-scripts-rust"
+version = "0.1.0"
+edition = "2024"
+description = "A set of useful tools for data wrangling"
+publish = false
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+str = "0.1.4"
+
+[dependencies.polars]
+version = "0.52"
+features = ["lazy", "pivot", "regex", "strings", "polars-ops", "concat_str", "timezones", "dtype-categorical", "fmt"]
+
+[profile.release]
+opt-level = 3
+strip = "debuginfo"
+lto = true
+
+[profile.release.build-override]
+opt-level = 3
+codegen-units = 256
