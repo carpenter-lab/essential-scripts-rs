@@ -618,7 +618,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "essential-scripts-rust"
+name = "essential-scripts-rs"
 version = "0.1.0"
 dependencies = [
     "clap",
