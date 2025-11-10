@@ -1,5 +1,7 @@
 # CLI tools to make data processing and preparation easier
 
+[![Rust](https://github.com/carpenter-lab/essential-scripts-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/carpenter-lab/essential-scripts-rs/actions/workflows/rust.yml)
+
 ## Installation
 
 To install the latest version of the package, run:
