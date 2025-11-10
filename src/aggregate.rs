@@ -1,8 +1,6 @@
 use crate::io::WriteToCsvOrStdout;
 use clap::Subcommand;
-use polars::prelude::pivot::pivot_stable;
 use polars::prelude::*;
-use std::error::Error;
 use std::path::PathBuf;
 
 #[derive(Subcommand)]
@@ -10,84 +8,118 @@ pub enum Commands {
     #[command(about = "Aggregate CellRanger TCR output from multiple samples")]
     AggregateCellRangerTCR {
         #[arg(required = true, num_args = 1.., help = "Input CSV files to process")]
-        input_files: Vec<PathBuf>,
+        input_files: Vec<String>,
 
         #[arg(required = true, help = "Output file path")]
         output_file: PathBuf,
+
+        #[arg(
+            short,
+            long,
+            action = clap::ArgAction::SetTrue,
+            default_value_t = false,
+            help = "Keep alpha chain in output [default: false]"
+        )]
+        keep_alpha: bool,
     },
 }
 
-fn process_input_lazy(df: LazyFrame) -> Result<LazyFrame, PolarsError> {
-    // Collect and pivot
-    let df2 = df.group_by(["sample", "barcode", "chain"]).agg([
-        col("v_gene").alias("v_gene"),
-        col("d_gene").alias("d_gene"),
-        col("j_gene").alias("j_gene"),
-        col("cdr3").alias("cdr3"),
-    ]);
-
-    let pivoted = pivot_stable(
-        &df2.collect()?,
-        ["chain"],
-        Some(["sample", "barcode"]),
-        Some(["v_gene", "d_gene", "j_gene", "cdr3"]),
-        false,
-        None,
-        None,
-    )?;
-
-    let result = pivoted
-        .lazy()
-        .explode(Selector::Matches(PlSmallStr::from_str("_TRB$")))
-        .explode(Selector::Matches(PlSmallStr::from_str("_TRA$")))
-        .group_by([
-            col("sample"),
-            col("barcode"),
-            col("cdr3_TRB"),
-            col("v_gene_TRB"),
-            col("j_gene_TRB"),
-            col("cdr3_TRA"),
-            col("v_gene_TRA"),
-            col("j_gene_TRA"),
+fn process_input_lazy(df: LazyFrame, keep_alpha: bool) -> LazyFrame {
+    let df2 = df
+        .group_by(["sample", "barcode", "chain"])
+        .agg([
+            col("v_gene").alias("v_gene"),
+            col("d_gene").alias("d_gene"),
+            col("j_gene").alias("j_gene"),
+            col("cdr3").alias("cdr3"),
         ])
+        .group_by(["sample", "barcode"])
+        .agg([
+            col("cdr3")
+                .filter(col("chain").eq(lit("TRB")))
+                .alias("cdr3_TRB")
+                .flatten(),
+            col("v_gene")
+                .filter(col("chain").eq(lit("TRB")))
+                .alias("v_gene_TRB")
+                .flatten(),
+            col("j_gene")
+                .filter(col("chain").eq(lit("TRB")))
+                .alias("j_gene_TRB")
+                .flatten(),
+            col("cdr3")
+                .filter(col("chain").eq(lit("TRA")))
+                .alias("cdr3_TRA")
+                .flatten(),
+            col("v_gene")
+                .filter(col("chain").eq(lit("TRA")))
+                .alias("v_gene_TRA")
+                .flatten(),
+            col("j_gene")
+                .filter(col("chain").eq(lit("TRA")))
+                .alias("j_gene_TRA")
+                .flatten(),
+        ])
+        .explode(col("^.*_TRA$").into_selector().unwrap())
+        .explode(col("^.*_TRB$").into_selector().unwrap())
+        .group_by([col("sample"), col("^.*_TRA$"), col("^.*_TRB$")])
         .agg([len().alias("count")])
-        .with_column(col("sample").str().replace_all(lit("-"), lit(":"), false))
-        .select([
+        .with_column(col("sample").str().replace_all(lit("-"), lit(":"), false));
+    let result = match keep_alpha {
+        false => df2.select([
             col("sample"),
             col("cdr3_TRB").alias("CDR3b"),
             col("v_gene_TRB").alias("TRBV"),
             col("j_gene_TRB").alias("TRBJ"),
             col("cdr3_TRA").alias("CDR3a"),
             col("count"),
-        ]);
-
-    Ok(result)
+        ]),
+        true => df2.select([
+            col("sample"),
+            col("cdr3_TRB").alias("CDR3b"),
+            col("v_gene_TRB").alias("TRBV"),
+            col("j_gene_TRB").alias("TRBJ"),
+            col("cdr3_TRA").alias("CDR3a"),
+            col("v_gene_TRA").alias("TRAV"),
+            col("j_gene_TRA").alias("TRAJ"),
+            col("count"),
+        ]),
+    };
+    result
 }
 
 pub(crate) fn aggregate_cellranger_tcr_output(
-    input_files: &Vec<PathBuf>,
+    input_files: &Vec<String>,
     output_file: &PathBuf,
-) -> Result<(), Box<dyn Error>> {
-    println!("Processing {:?} files", input_files);
+    keep_alpha: bool,
+) -> () {
+    let concat_args = UnionArgs {
+        parallel: true,
+        rechunk: false,
+        to_supertypes: false,
+        diagonal: false,
+        from_partitioned_ds: false,
+        maintain_order: false,
+    };
+
+    println!("Processing {} files", input_files.len());
     let mut dfs = Vec::new();
 
     for input_file in input_files {
-        let df = LazyCsvReader::new(PlPath::from_str(input_file.to_str().expect(""))).finish()?;
-        dfs.push(df);
+        let df = LazyCsvReader::new(PlPath::new(input_file)).finish();
+
+        match df {
+            Ok(df) => dfs.push(df),
+            Err(error) => {
+                eprintln!("Failed to read file: {}", input_file);
+                eprintln!("Error: {}", error);
+                std::process::exit(1);
+            }
+        }
     }
 
-    let concatenated = concat(
-        &dfs,
-        UnionArgs {
-            parallel: true,
-            rechunk: false,
-            to_supertypes: false,
-            diagonal: false,
-            from_partitioned_ds: false,
-            maintain_order: false,
-        },
-    )?;
-    let processed = process_input_lazy(concatenated)?;
+    let concatenated = concat(&dfs, concat_args).expect("Failed to concatenate input files");
+    let processed = process_input_lazy(concatenated, keep_alpha).with_new_streaming(true);
 
     processed.write_to_csv_or_stdout(output_file)
 }
@@ -97,8 +129,9 @@ pub fn handle_command(cmd: Commands) -> () {
         Commands::AggregateCellRangerTCR {
             input_files,
             output_file,
+            keep_alpha,
         } => {
-            aggregate_cellranger_tcr_output(&input_files, &output_file).expect("");
+            aggregate_cellranger_tcr_output(&input_files, &output_file, keep_alpha);
         }
     }
 }
@@ -106,29 +139,149 @@ pub fn handle_command(cmd: Commands) -> () {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use polars_testing::assert_dataframe_equal;
 
     #[test]
-    fn it_works() {
-        let paths: Vec<PathBuf> = Vec::from([
-            "filtered_contig_annotations.csv",
-            "filtered_contig_annotations1.csv",
-        ])
-        .into_iter()
-        .map(PathBuf::from)
-        .collect();
-        let result = aggregate_cellranger_tcr_output(&paths, &PathBuf::from("test_out.csv"));
-        assert!(result.is_ok());
-        let result_data = LazyCsvReader::new(PlPath::from_str("test_out.csv"))
-            .finish()
+    fn test_process_input_lazy() {
+        let df = df!(
+            "sample" => [
+                "U91846-Inf",
+                "U91846-Inf",
+                "U91846-Inf",
+                "U91846-Inf",
+                "U91846-Inf",
+                "U90979-Peptide",
+                "U90979-Peptide",
+                "U90979-Peptide",
+                "U90979-Peptide",
+                "U90979-Peptide",
+                "U90979-Peptide"
+            ],
+            "barcode" => [
+                "ACACTGATCCTTGCCA-1",
+                "ACACTGATCCTTGCCA-1",
+                "AGATCTGGTGCAGACA-1",
+                "AGCATACCACACAGAG-1",
+                "AGCATACCACACAGAG-1",
+                "AAACCTGTCATCGCTC-1",
+                "AAACCTGTCATCGCTC-1",
+                "AAGGCAGTCGGTGTCG-1",
+                "AAGGCAGTCGGTGTCG-1",
+                "AAGGCAGTCGGTGTCG-1",
+                "AAGGCAGTCGGTGTCG-1"
+            ],
+            "chain" => ["TRB", "TRA", "TRB", "TRA", "TRB", "TRB", "TRA", "TRB", "TRB", "TRA", "TRA"],
+            "v_gene" => [
+                "TRBV7-2",
+                "TRAV1-2",
+                "TRBV6-5",
+                "TRAV10",
+                "TRBV15",
+                "TRBV27",
+                "TRAV12-3",
+                "TRBV5-4",
+                "TRBV20-1",
+                "TRAV41",
+                "TRAV8-6"
+            ],
+            "d_gene" => [None, None, None, None, None, Some("TRBD1"), None, None, None, None, None],
+            "j_gene" => [
+                "TRBJ1-4",
+                "TRAJ47",
+                "TRBJ1-3",
+                "TRAJ36",
+                "TRBJ2-1",
+                "TRBJ2-7",
+                "TRAJ36",
+                "TRBJ2-3",
+                "TRBJ1-1",
+                "TRAJ47",
+                "TRAJ56"
+            ],
+            "cdr3" => [
+                "CASSLGLWEKLFF",
+                "CAVRDGNKLVF",
+                "CASRRGNTIYF",
+                "CVVSSQTGANNLFF",
+                "CATSRDRGRNNEQFF",
+                "CASSLLGQGWDEQYF",
+                "CAMSHQTGANNLFF",
+                "CASSLMGGASDTQYF",
+                "CSALILNAEAFF",
+                "CAVNRNKLVF",
+                "CAVSGDTGANSKLTF"
+            ]
+        )
             .unwrap()
-            .sort(["sample", "CDR3b"], Default::default());
-        let expected_data = LazyCsvReader::new(PlPath::from_str("test_out_expected.csv"))
-            .finish()
+            .lazy();
+
+        let df = process_input_lazy(df, false)
+            .collect()
             .unwrap()
-            .sort(["sample", "CDR3b"], Default::default());
-        assert_eq!(
-            result_data.collect().unwrap(),
-            expected_data.collect().unwrap()
-        );
+            .sort(["sample", "CDR3b", "CDR3a"], Default::default())
+            .unwrap();
+
+        let df_expected = df!(
+            "sample" => [
+                "U90979:Peptide",
+                "U90979:Peptide",
+                "U91846:Inf",
+                "U90979:Peptide",
+                "U90979:Peptide",
+                "U90979:Peptide",
+                "U91846:Inf",
+                "U91846:Inf"
+            ],
+            "CDR3b" => [
+                "CASSLMGGASDTQYF",
+                "CSALILNAEAFF",
+                "CASRRGNTIYF",
+                "CASSLMGGASDTQYF",
+                "CSALILNAEAFF",
+                "CASSLLGQGWDEQYF",
+                "CASSLGLWEKLFF",
+                "CATSRDRGRNNEQFF"
+            ],
+            "TRBV" => [
+                "TRBV5-4",
+                "TRBV20-1",
+                "TRBV6-5",
+                "TRBV5-4",
+                "TRBV20-1",
+                "TRBV27",
+                "TRBV7-2",
+                "TRBV15"
+            ],
+            "TRBJ" => [
+                "TRBJ2-3",
+                "TRBJ1-1",
+                "TRBJ1-3",
+                "TRBJ2-3",
+                "TRBJ1-1",
+                "TRBJ2-7",
+                "TRBJ1-4",
+                "TRBJ2-1"
+            ],
+            "CDR3a" => [
+                Some("CAVNRNKLVF"),
+                Some("CAVSGDTGANSKLTF"),
+                None,
+                Some("CAVSGDTGANSKLTF"),
+                Some("CAVNRNKLVF"),
+                Some("CAMSHQTGANNLFF"),
+                Some("CAVRDGNKLVF"),
+                Some("CVVSSQTGANNLFF")
+            ],
+            "count" => [1, 1, 1, 1, 1, 1, 1, 1]
+        )
+        .unwrap()
+        .lazy()
+        .with_column(col("count").cast(DataType::UInt32))
+        .collect()
+        .unwrap()
+        .sort(["sample", "CDR3b", "CDR3a"], Default::default())
+        .unwrap();
+
+        assert_dataframe_equal!(&df, &df_expected);
     }
 }

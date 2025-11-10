@@ -7,11 +7,10 @@ publish = false
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
-str = "0.1.4"
 
 [dependencies.polars]
 version = "0.52"
-features = ["lazy", "pivot", "regex", "strings", "polars-ops", "concat_str", "timezones", "dtype-categorical", "fmt"]
+features = ["lazy", "strings", "concat_str", "timezones"]
 
 [profile.release]
 opt-level = 3
@@ -20,4 +19,7 @@ lto = true
 
 [profile.release.build-override]
 opt-level = 3
-codegen-units = 256
+codegen-units = 1
+
+[dev-dependencies]
+polars-testing = "0.52.0"
