@@ -11,6 +11,14 @@ pub enum Commands {
 
         #[arg(required = true, help = "Output file path")]
         output_file: PathBuf,
+
+        #[arg(
+            short,
+            long,
+            default_value = "subject:condition",
+            help = "Column to split"
+        )]
+        column_name: String,
     },
     #[command(about = "Split CDR3 sequences and genes if a semicolon is present")]
     SplitCdr3Seq {
@@ -151,11 +159,18 @@ pub(crate) fn split_cdr3_seq_main(
 pub(crate) fn split_sample_id(
     input_file: &PathBuf,
     output_file: &PathBuf,
+    column_name: &String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let df = LazyCsvReader::new(PlPath::from_str(input_file.to_str().expect("")))
         .finish()
         .unwrap();
-    let df = df.with_column(col("subject:condition").str().split(lit(":")));
+    let df = df
+        .with_column(col(column_name).str().split(lit(":")))
+        .with_columns([
+            col(column_name).list().first().alias("subject"),
+            col(column_name).list().last().alias("condition"),
+        ])
+        .select([all().exclude_cols([column_name]).as_expr()]);
     let output = std::fs::File::create(output_file).expect("Failed to create output file");
     let fin = CsvWriter::new(output).finish(&mut df.collect()?);
 
@@ -170,8 +185,9 @@ pub fn handle_command(cmd: Commands) -> () {
         Commands::SplitSampleId {
             input_file,
             output_file,
+            column_name,
         } => {
-            split_sample_id(&input_file, &output_file).unwrap();
+            split_sample_id(&input_file, &output_file, &column_name).unwrap();
         }
         Commands::SplitCdr3Seq {
             input_file,
