@@ -1,3 +1,4 @@
+use crate::io::WriteToCsvOrStdout;
 use clap::Subcommand;
 use polars::prelude::*;
 use std::path::PathBuf;
@@ -132,7 +133,7 @@ pub(crate) fn split_cdr3_seq_main(
     input_file: &PathBuf,
     output_file: &PathBuf,
     group: Vec<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> () {
     let mut df: LazyFrame = LazyCsvReader::new(PlPath::from_str(input_file.to_str().expect("")))
         .finish()
         .unwrap();
@@ -142,25 +143,20 @@ pub(crate) fn split_cdr3_seq_main(
 
     // Process both chains
     for chain in &["alpha", "beta"] {
-        df = split_cdr3_seq(df, &group_refs, chain)?;
+        df = split_cdr3_seq(df, &group_refs, chain).expect("Failed to split CDR3 sequences");
     }
 
     // Write output
-    let mut output = std::fs::File::create(output_file)?;
-    let mut df = df.collect()?;
-    let fin = CsvWriter::new(&mut output).finish(&mut df);
-
-    match fin {
-        Ok(_) => Ok(()),
-        Err(e) => Err(e.into()),
-    }
+    df.collect()
+        .expect("Failed to collect dataframe")
+        .write_to_flat_or_stdout(output_file, None)
 }
 
 pub(crate) fn split_sample_id(
     input_file: &PathBuf,
     output_file: &PathBuf,
     column_name: &String,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> () {
     let df = LazyCsvReader::new(PlPath::from_str(input_file.to_str().expect("")))
         .finish()
         .unwrap();
@@ -171,13 +167,10 @@ pub(crate) fn split_sample_id(
             col(column_name).list().last().alias("condition"),
         ])
         .select([all().exclude_cols([column_name]).as_expr()]);
-    let output = std::fs::File::create(output_file).expect("Failed to create output file");
-    let fin = CsvWriter::new(output).finish(&mut df.collect()?);
 
-    match fin {
-        Ok(_) => Ok(()),
-        Err(e) => Err(e.into()),
-    }
+    df.collect()
+        .expect("Failed to collect dataframe")
+        .write_to_flat_or_stdout(output_file, None)
 }
 
 pub fn handle_command(cmd: Commands) -> () {
@@ -187,14 +180,14 @@ pub fn handle_command(cmd: Commands) -> () {
             output_file,
             column_name,
         } => {
-            split_sample_id(&input_file, &output_file, &column_name).unwrap();
+            split_sample_id(&input_file, &output_file, &column_name);
         }
         Commands::SplitCdr3Seq {
             input_file,
             output_file,
             group,
         } => {
-            split_cdr3_seq_main(&input_file, &output_file, group).unwrap();
+            split_cdr3_seq_main(&input_file, &output_file, group);
         }
     }
 }
