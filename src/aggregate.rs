@@ -95,11 +95,11 @@ pub(crate) fn aggregate_cellranger_tcr_output(
 ) -> () {
     let concat_args = UnionArgs {
         parallel: true,
-        rechunk: false,
+        rechunk: true,
         to_supertypes: false,
         diagonal: false,
         from_partitioned_ds: false,
-        maintain_order: false,
+        maintain_order: true,
     };
 
     println!("Processing {} files", input_files.len());
@@ -109,7 +109,7 @@ pub(crate) fn aggregate_cellranger_tcr_output(
         let df = LazyCsvReader::new(PlPath::new(input_file)).finish();
 
         match df {
-            Ok(df) => dfs.push(df),
+            Ok(df) => dfs.push(df.with_new_streaming(true)),
             Err(error) => {
                 eprintln!("Failed to read file: {}", input_file);
                 eprintln!("Error: {}", error);
@@ -118,8 +118,12 @@ pub(crate) fn aggregate_cellranger_tcr_output(
         }
     }
 
-    let concatenated = concat(&dfs, concat_args).expect("Failed to concatenate input files");
-    let processed = process_input_lazy(concatenated, keep_alpha).with_new_streaming(true);
+    let concatenated = concat(&dfs, concat_args)
+        .expect("Failed to concatenate input files")
+        .with_new_streaming(true);
+    let processed = process_input_lazy(concatenated, keep_alpha)
+        .filter(col("CDR3b").is_not_null())
+        .filter(col("CDR3b").neq(lit("")));
 
     processed.write_to_csv_or_stdout(output_file)
 }
