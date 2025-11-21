@@ -1,13 +1,12 @@
 use polars::prelude::*;
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 fn get_extension_from_filename(filename: &PathBuf) -> Option<&str> {
-    Path::new(filename).extension().and_then(OsStr::to_str)
+    Path::new(filename).extension().and_then(|s| s.to_str())
 }
 
 fn write_df_output(df: &mut DataFrame, output_file: &PathBuf, separator: u8) {
-    if output_file == std::path::Path::new("-") {
+    if output_file == Path::new("-") {
         let stdout = std::io::stdout();
         let output = stdout.lock();
         CsvWriter::new(output)
@@ -24,7 +23,7 @@ fn write_df_output(df: &mut DataFrame, output_file: &PathBuf, separator: u8) {
 }
 
 fn write_lazy_output(lf: LazyFrame, output_file: &PathBuf, separator: u8) {
-    if output_file == std::path::Path::new("-") {
+    if output_file == Path::new("-") {
         let mut df = lf
             .collect()
             .expect("Failed to collect lazy frame prior to writing to stdout");
