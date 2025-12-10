@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 mod aggregate;
+mod copy_cellranger_outs;
 mod io;
 mod plate_reader;
 mod split;
@@ -22,6 +23,9 @@ enum Commands {
 
     #[command(flatten)]
     ReformatPlateReaderData(plate_reader::Commands),
+
+    #[command(flatten)]
+    CopyCellRangerOuts(copy_cellranger_outs::Commands),
 }
 
 fn main() -> () {
@@ -31,6 +35,7 @@ fn main() -> () {
         Some(Commands::Aggregate(cmd)) => aggregate::handle_command(cmd),
         Some(Commands::Split(cmd)) => split::handle_command(cmd),
         Some(Commands::ReformatPlateReaderData(cmd)) => plate_reader::handle_command(cmd),
+        Some(Commands::CopyCellRangerOuts(cmd)) => copy_cellranger_outs::handle_command(cmd),
         None => {}
     }
 }
