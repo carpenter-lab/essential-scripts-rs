@@ -219,18 +219,29 @@ fn copy_outputs_for_pipestance(
                             let from = f.path();
                             if from.is_file() {
                                 let to = dst_dir.join(f.file_name());
-                                let _ = fs::copy(&from, &to);
+                                if let Err(e) = fs::copy(&from, &to) {
+                                    eprintln!(
+                                        "Failed to copy {} to {}: {}",
+                                        from.display(),
+                                        to.display(),
+                                        e
+                                    );
+                                }
                             }
                         }
                     }
                     Err(_) => {
                         // Remove created directory if we cannot read the source
-                        let _ = fs::remove_dir(&dst_dir);
+                        if let Err(e) = fs::remove_dir(&dst_dir) {
+                            eprintln!("Failed to remove {}: {}", dst_dir.display(), e);
+                        }
                     }
                 }
             } else {
                 // Source MEX missing; remove created empty dir
-                let _ = fs::remove_dir(&dst_dir);
+                if let Err(e) = fs::remove_dir(&dst_dir) {
+                    eprintln!("Failed to remove {}: {}", dst_dir.display(), e);
+                }
             }
         }
 
@@ -238,7 +249,14 @@ fn copy_outputs_for_pipestance(
             let src = sample_dir.join(PATH_TO_VDJ_ANN);
             if src.is_file() {
                 let dst = dest.join(format!("{}.csv", sample_name));
-                let _ = fs::copy(&src, &dst);
+                if let Err(e) = fs::copy(&src, &dst) {
+                    eprintln!(
+                        "Failed to copy {} to {}: {}",
+                        src.display(),
+                        dst.display(),
+                        e
+                    );
+                }
             }
         }
     }
