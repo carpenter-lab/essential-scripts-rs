@@ -202,8 +202,14 @@ fn copy_outputs_for_pipestance(
             let src = sample_dir.join(PATH_TO_COUNT_H5);
             if src.is_file() {
                 let dst = dest.join(format!("{}.h5", sample_name));
-                let _ = fs::copy(&src, &dst);
-            }
+                if let Err(e) = fs::copy(&src, &dst) {
+                    eprintln!(
+                        "Failed to copy {} to {}: {}",
+                        src.display(),
+                        dst.display(),
+                        e
+                    );
+                }
         }
 
         if mex {
