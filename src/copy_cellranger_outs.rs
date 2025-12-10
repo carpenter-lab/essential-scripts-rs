@@ -71,8 +71,8 @@ pub fn handle_command(cmd: Commands) -> () {
 }
 
 fn copy_cellranger_outs_main(
-    base_path: &PathBuf,
-    dest: &PathBuf,
+    base_path: &Path,
+    dest: &Path,
     h5: bool,
     mex: bool,
     vdj: bool,
