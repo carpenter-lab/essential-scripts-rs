@@ -210,6 +210,7 @@ fn copy_outputs_for_pipestance(
                         e
                     );
                 }
+            }
         }
 
         if mex {
