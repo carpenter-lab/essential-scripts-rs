@@ -7,6 +7,9 @@ publish = false
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
+indicatif = "0.18"
+rand = "0.9"
+parasail-rs = "0.9"
 
 [dependencies.polars]
 version = "0.52"
