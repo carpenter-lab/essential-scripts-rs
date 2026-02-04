@@ -57,7 +57,7 @@ pub enum Commands {
     },
 }
 
-pub fn handle_command(cmd: Commands) -> () {
+pub fn handle_command(cmd: Commands) {
     match cmd {
         Commands::CopyCellRangerOuts {
             base_path,
@@ -237,8 +237,9 @@ fn copy_outputs_for_pipestance(
                             }
                         }
                     }
-                    Err(_) => {
-                        // Remove created directory if we cannot read the source
+                    Err(e) => {
+                        eprintln!("Failed to read {}: {}", src_dir.display(), e);
+                        // Remove the new directory if we cannot read the source
                         if let Err(e) = fs::remove_dir(&dst_dir) {
                             eprintln!("Failed to remove {}: {}", dst_dir.display(), e);
                         }
