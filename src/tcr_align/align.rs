@@ -35,7 +35,9 @@ pub fn run_parasail<S: AsRef<str>>(
     reference: Option<&[S]>,
 ) -> PolarsResult<f64> {
     if a.is_empty() {
-        return Err(PolarsError::ComputeError("A is empty".into()));
+        return Err(PolarsError::ComputeError(
+            "Cannot run alignment: input sequence list is empty".into(),
+        ));
     }
 
     let mut sum: i64 = 0;

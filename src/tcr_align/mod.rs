@@ -10,7 +10,7 @@ use std::path::PathBuf;
 pub enum Commands {
     #[command(about = "Score a GLIPH2 output file with a TCR alignment pipeline")]
     ScoreTCRAlignments {
-        #[arg(required = true, num_args = 1.., help = "Input CSV file to process")]
+        #[arg(required = true, help = "Input CSV file to process")]
         input_file: String,
 
         #[arg(required = true, help = "Output file path")]
@@ -23,24 +23,35 @@ pub enum Commands {
 
 pub trait Run {
     type Output;
-    fn run(&self, n_replicates: usize) -> PolarsResult<DataFrame>;
+    fn run(&self, n_replicates: usize) -> PolarsResult<Self::Output>;
 }
 
 impl Run for DataFrame {
     type Output = DataFrame;
-    fn run(self: &DataFrame, n_replicates: usize) -> PolarsResult<DataFrame> {
+    fn run(self: &DataFrame, n_replicates: usize) -> PolarsResult<Self::Output> {
         let all_unique_alpha = dataframe::all_unique_cdr3_alpha(self)?;
 
-        let groups = dataframe::prepare_parasail_groups(self);
-
-        let result =
-            dataframe::fraction_self_greater(&groups, &all_unique_alpha, n_replicates, 7, 1)?;
-
-        Ok(result)
+        //let groups = dataframe::prepare_parasail_groups(self);
+        match dataframe::prepare_parasail_groups(self) {
+            Err(e) => {
+                println!("Error preparing parasail groups: {}", e);
+                Err(e)
+            }
+            Ok(groups) => {
+                let result = dataframe::fraction_self_greater(
+                    &groups,
+                    &all_unique_alpha,
+                    n_replicates,
+                    7,
+                    1,
+                )?;
+                Ok(result)
+            }
+        }
     }
 }
 
-pub(crate) fn tcr_score(input_file: &String, output_file: &PathBuf, replicates: usize) -> () {
+pub(crate) fn tcr_score(input_file: &str, output_file: &PathBuf, replicates: usize) -> () {
     let df = LazyCsvReader::new(PlPath::new(input_file))
         .finish()
         .unwrap()
