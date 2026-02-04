@@ -28,7 +28,7 @@ enum Commands {
     CopyCellRangerOuts(copy_cellranger_outs::Commands),
 }
 
-fn main() -> () {
+fn main() {
     let cli = Cli::parse();
 
     match cli.command {
