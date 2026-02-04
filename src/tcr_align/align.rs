@@ -79,3 +79,144 @@ pub fn run_parasail<S: AsRef<str>>(
         (sum as f64) / (n as f64)
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use polars::error::PolarsError;
+
+    const GAP_OPEN: i32 = 10;
+    const GAP_EXTEND: i32 = 1;
+
+    #[test]
+    fn empty_input_returns_err() {
+        let aligner = build_protein_aligner(GAP_OPEN, GAP_EXTEND).expect("aligner build");
+        let res = run_parasail(&aligner, &[] as &[&str], None);
+        assert!(res.is_err(), "expected error for empty input");
+        match res {
+            Err(PolarsError::ComputeError(err)) => {
+                let msg = format!("{}", err);
+                assert!(msg.contains("Cannot run alignment"));
+            }
+            Err(e) => panic!("unexpected error variant: {:?}", e),
+            Ok(_) => panic!("expected Err, got Ok"),
+        }
+    }
+
+    #[test]
+    fn empty_reference_produces_nan() {
+        let aligner = build_protein_aligner(GAP_OPEN, GAP_EXTEND).expect("aligner build");
+        let a = ["A", "C"];
+        let res = run_parasail(&aligner, &a, Some(&[] as &[&str])).expect("call ok");
+        assert!(res.is_nan());
+    }
+
+    #[test]
+    fn single_sequence_no_reference_produces_nan() {
+        let aligner = build_protein_aligner(GAP_OPEN, GAP_EXTEND).expect("aligner build");
+        let a = ["ACDEF"];
+        let res = run_parasail(&aligner, &a, None).expect("call ok");
+        assert!(res.is_nan());
+    }
+
+    #[test]
+    fn reference_pairing_mean_matches_manual_sum() {
+        let aligner = build_protein_aligner(GAP_OPEN, GAP_EXTEND).expect("aligner build");
+        let a = ["ACD", "WQ"];
+        let b = ["ACD", "WQ", "MN"];
+
+        let mean = run_parasail(&aligner, &a, Some(&b)).expect("call ok");
+
+        // Manual calculation
+        let mut sum: i64 = 0;
+        let mut n: i64 = 0;
+        for q in a.iter() {
+            for r in b.iter() {
+                let result = aligner
+                    .align(Some(q.as_bytes()), r.as_bytes())
+                    .expect("align ok");
+                sum += result.get_score() as i64;
+                n += 1;
+            }
+        }
+        let expected = if n == 0 {
+            f64::NAN
+        } else {
+            (sum as f64) / (n as f64)
+        };
+        if expected.is_nan() {
+            assert!(mean.is_nan());
+        } else {
+            assert!(
+                (mean - expected).abs() < 1e-9,
+                "mean {} != expected {}",
+                mean,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn no_reference_pairing_mean_matches_manual_sum() {
+        let aligner = build_protein_aligner(GAP_OPEN, GAP_EXTEND).expect("aligner build");
+        let a = ["ACD", "WQ", "MN"];
+
+        let mean = run_parasail(&aligner, &a, None).expect("call ok");
+
+        let mut sum: i64 = 0;
+        let mut n: i64 = 0;
+        for i in 0..a.len() {
+            for j in (i + 1)..a.len() {
+                let result = aligner
+                    .align(Some(a[i].as_bytes()), a[j].as_bytes())
+                    .expect("align ok");
+                sum += result.get_score() as i64;
+                n += 1;
+            }
+        }
+        let expected = if n == 0 {
+            f64::NAN
+        } else {
+            (sum as f64) / (n as f64)
+        };
+        if expected.is_nan() {
+            assert!(mean.is_nan());
+        } else {
+            assert!(
+                (mean - expected).abs() < 1e-9,
+                "mean {} != expected {}",
+                mean,
+                expected
+            );
+        }
+    }
+
+    // Test helper to set the BLOSUM62 OnceLock to a failure. This is only available in tests.
+    #[cfg(test)]
+    pub(crate) fn set_blosum62_to_err_for_test(msg: &str) -> Result<(), String> {
+        BLOSUM62
+            .set(Err(msg.to_string()))
+            .map_err(|_| "BLOSUM62 already initialized".to_string())
+    }
+
+    #[test]
+    #[ignore = "for manual testing only"]
+    fn test_blosum62_error_handling() {
+        // Force the BLOSUM62 to an error state
+        set_blosum62_to_err_for_test("test error").expect("set error");
+
+        // Now, building the aligner should return an error
+        let res = build_protein_aligner(GAP_OPEN, GAP_EXTEND);
+        assert!(res.is_err(), "expected error when building aligner");
+
+        // Optionally, you can check the specific error message
+        if let Err(e) = res {
+            match e {
+                PolarsError::ComputeError(msg) => {
+                    assert!(msg.contains("test error"), "unexpected error message");
+                }
+                _ => panic!("unexpected error variant: {:?}", e),
+            }
+        }
+    }
+}
