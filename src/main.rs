@@ -32,7 +32,7 @@ enum Commands {
     TcrAlign(tcr_align::Commands),
 }
 
-fn main() -> () {
+fn main() {
     let cli = Cli::parse();
 
     match cli.command {
