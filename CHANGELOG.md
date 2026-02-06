@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v0.1.0...v0.2.0) (2026-02-06)
+
+
+### Features
+
+* add command to copy cellranger outputs ([#7](https://github.com/carpenter-lab/essential-scripts-rs/issues/7)) ([8d7b91d](https://github.com/carpenter-lab/essential-scripts-rs/commit/8d7b91de3f7059a591cd1dbb28e569c315b18275))
+* implement TCR alignment scoring command with Parasail integration ([#5](https://github.com/carpenter-lab/essential-scripts-rs/issues/5)) ([773919c](https://github.com/carpenter-lab/essential-scripts-rs/commit/773919c2a6444a51e565a03be0d7336979994ce3))
+* **plate-reader:** enhance data processing with stride-based flattening and improved output handling ([5ca621b](https://github.com/carpenter-lab/essential-scripts-rs/commit/5ca621bcbff11b67885320241ffef73f3062dc6f))
+
 ## 0.1.0 (2025-12-10)
 
 
