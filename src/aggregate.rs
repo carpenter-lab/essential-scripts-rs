@@ -1,3 +1,4 @@
+use crate::io;
 use crate::io::WriteToCsvOrStdout;
 use clap::Subcommand;
 use polars::prelude::*;
@@ -8,7 +9,7 @@ pub enum Commands {
     #[command(about = "Aggregate CellRanger TCR output from multiple samples")]
     AggregateCellRangerTCR {
         #[arg(required = true, num_args = 1.., help = "Input CSV files to process")]
-        input_files: Vec<String>,
+        input_files: Vec<PathBuf>,
 
         #[arg(required = true, help = "Output file path")]
         output_file: PathBuf,
@@ -89,7 +90,7 @@ fn process_input_lazy(df: LazyFrame, keep_alpha: bool) -> LazyFrame {
 }
 
 pub(crate) fn aggregate_cellranger_tcr_output(
-    input_files: &Vec<String>,
+    input_files: &Vec<PathBuf>,
     output_file: &PathBuf,
     keep_alpha: bool,
 ) -> () {
@@ -106,16 +107,8 @@ pub(crate) fn aggregate_cellranger_tcr_output(
     let mut dfs = Vec::new();
 
     for input_file in input_files {
-        let df = LazyCsvReader::new(PlPath::new(input_file)).finish();
-
-        match df {
-            Ok(df) => dfs.push(df.with_new_streaming(true)),
-            Err(error) => {
-                eprintln!("Failed to read file: {}", input_file);
-                eprintln!("Error: {}", error);
-                std::process::exit(1);
-            }
-        }
+        let df = io::read_from_file(input_file, None);
+        dfs.push(df.with_new_streaming(true));
     }
 
     let concatenated = concat(&dfs, concat_args)

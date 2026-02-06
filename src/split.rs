@@ -1,3 +1,4 @@
+use crate::io;
 use crate::io::WriteToCsvOrStdout;
 use clap::Subcommand;
 use polars::prelude::*;
@@ -134,9 +135,7 @@ pub(crate) fn split_cdr3_seq_main(
     output_file: &PathBuf,
     group: Vec<String>,
 ) -> () {
-    let mut df: LazyFrame = LazyCsvReader::new(PlPath::from_str(input_file.to_str().expect("")))
-        .finish()
-        .unwrap();
+    let mut df: LazyFrame = io::read_from_file(input_file, None);
 
     // Convert group strings to string slices
     let group_refs: Vec<&str> = group.iter().map(|s| s.as_str()).collect();
@@ -157,9 +156,7 @@ pub(crate) fn split_sample_id(
     output_file: &PathBuf,
     column_name: &String,
 ) -> () {
-    let df = LazyCsvReader::new(PlPath::from_str(input_file.to_str().expect("")))
-        .finish()
-        .unwrap();
+    let df = io::read_from_file(input_file, None);
     let df = df
         .with_column(col(column_name).str().split(lit(":")))
         .with_columns([
