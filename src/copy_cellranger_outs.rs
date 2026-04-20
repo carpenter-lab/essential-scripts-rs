@@ -216,10 +216,17 @@ fn copy_outputs_for_pipestance(
         if mex {
             let src_dir = sample_dir.join(PATH_TO_COUNT_MEX);
             let dst_dir = dest.join(sample_name);
-            let dst_dir_preexisted = dst_dir.exists();
-            if let Err(e) = fs::create_dir_all(&dst_dir) {
-                eprintln!("Failed to create {}: {}", dst_dir.display(), e);
-            } else if src_dir.is_dir() {
+            // Use create_dir (not create_dir_all) to atomically determine whether
+            // we created the directory in this run, avoiding a TOCTOU race condition.
+            let dst_dir_newly_created = match fs::create_dir(&dst_dir) {
+                Ok(()) => true,
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => false,
+                Err(e) => {
+                    eprintln!("Failed to create {}: {}", dst_dir.display(), e);
+                    continue;
+                }
+            };
+            if src_dir.is_dir() {
                 // Copy non-recursively, mirroring the Python behavior
                 match fs::read_dir(&src_dir) {
                     Ok(files) => {
@@ -241,7 +248,7 @@ fn copy_outputs_for_pipestance(
                     Err(e) => {
                         eprintln!("Failed to read {}: {}", src_dir.display(), e);
                         // Only remove the destination directory if it was created in this run
-                        if !dst_dir_preexisted {
+                        if dst_dir_newly_created {
                             if let Err(e) = fs::remove_dir(&dst_dir) {
                                 eprintln!("Failed to remove {}: {}", dst_dir.display(), e);
                             }
@@ -250,7 +257,7 @@ fn copy_outputs_for_pipestance(
                 }
             } else {
                 // Source MEX missing; remove created empty dir only if new
-                if !dst_dir_preexisted {
+                if dst_dir_newly_created {
                     if let Err(e) = fs::remove_dir(&dst_dir) {
                         eprintln!("Failed to remove {}: {}", dst_dir.display(), e);
                     }
