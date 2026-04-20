@@ -32,7 +32,7 @@ fn flatten_by_stride(
         return Ok(Vec::new());
     }
 
-    let columns = block.get_columns();
+    let columns = block.columns();
     let ncols = columns.len();
     let height = block.height();
 
@@ -92,7 +92,7 @@ fn drop_mostly_empty_rows(df: DataFrame, threshold: usize) -> PolarsResult<DataF
     for row_idx in 0..height {
         let mut non_null_count = 0;
 
-        for col in df.get_columns() {
+        for col in df.columns() {
             let val = col.get(row_idx)?;
 
             if !val.is_null() && !val.is_nan() && val != AnyValue::from("") {
@@ -205,7 +205,7 @@ fn prepare_data(
         let sliced = col.slice(0, setup_end_row);
         setup_cols.push(sliced);
     }
-    let setup_slice = DataFrame::new(setup_cols)?;
+    let setup_slice = DataFrame::new_infer_height(setup_cols)?;
 
     // Extract data slice (after setup + 5 rows gap)
     let data_row_start = setup_end_row + 5;
@@ -215,7 +215,7 @@ fn prepare_data(
         let sliced = col.slice(data_row_start as i64, data_stride * 8);
         data_cols.push(sliced);
     }
-    let data_slice = DataFrame::new(data_cols)?;
+    let data_slice = DataFrame::new_infer_height(data_cols)?;
 
     // Extract labels from the last column
     let last_col_name = df.get_column_names()[n_cols - 1];
@@ -270,7 +270,7 @@ fn prepare_data(
     let well_id_series = Series::new("well_id".into(), well_ids);
     series_vec.push(well_id_series.into_column());
 
-    let result_df = DataFrame::new(series_vec)?;
+    let result_df = DataFrame::new_infer_height(series_vec)?;
 
     // Drop rows with fewer than 2 non-null values (equivalent to dropna(thresh=2))
     let result_df = drop_mostly_empty_rows(result_df, 2)?;
@@ -404,12 +404,12 @@ fn run(
 
     let binding = out.clone();
     let new_names: Vec<String> = binding
-        .get_columns()
+        .columns()
         .iter()
         .map(|c| io::strip_quotes(c.name().as_str()))
         .collect();
 
-    out.set_column_names(new_names.clone())?;
+    out.set_column_names(&new_names.clone())?;
     // Select only the columns in the desired order
     out.select(&new_names)
 }
@@ -424,7 +424,7 @@ fn reformat_plate_reader_data(input_file: &PathBuf, output_dir: &PathBuf) -> Pol
         let mut output_file = output_dir.clone();
         let sheet_sanitized = sheet.replace(" ", "_").replace("/", "_");
         output_file.push(format!("{}.csv", sheet_sanitized));
-        df.write_to_csv_or_stdout(&output_file);
+        df.write_to_csv_or_stdout(output_file);
     }
 
     Ok(())

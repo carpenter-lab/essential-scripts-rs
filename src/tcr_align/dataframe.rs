@@ -2,7 +2,7 @@ use crate::tcr_align::align::{build_protein_aligner, run_parasail};
 use indicatif::ProgressStyle;
 use polars::error::PolarsResult;
 use polars::frame::{DataFrame, UniqueKeepStrategy};
-use polars::prelude::{IntoLazy, NamedFrom, Series, col, len, lit};
+use polars::prelude::{ExplodeOptions, IntoLazy, NamedFrom, Series, col, len, lit};
 use rand::SeedableRng;
 use rand::prelude::IndexedRandom;
 use rand::rngs::SmallRng;
@@ -24,6 +24,10 @@ pub(crate) fn all_unique_cdr3_alpha(all_data: &DataFrame) -> PolarsResult<Vec<St
             col("TcRa_list")
                 .into_selector()
                 .expect("could not create selector"),
+            ExplodeOptions {
+                empty_as_null: false,
+                keep_nulls: false,
+            },
         )
         .select([col("TcRa_list")])
         .filter(col("TcRa_list").is_not_null())
@@ -52,6 +56,10 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> PolarsResult<Data
             col("TcRa_list")
                 .into_selector()
                 .expect("could not create selector"),
+            ExplodeOptions {
+                empty_as_null: false,
+                keep_nulls: false,
+            },
         )
         .drop(
             col("TcRa")
@@ -66,6 +74,10 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> PolarsResult<Data
             col("TcRb_list")
                 .into_selector()
                 .expect("could not create selector"),
+            ExplodeOptions {
+                empty_as_null: false,
+                keep_nulls: false,
+            },
         )
         .drop(
             col("TcRb")
@@ -157,7 +169,7 @@ pub(crate) fn fraction_self_greater(
         &mut rng,
     );
 
-    DataFrame::new(vec![
+    DataFrame::new_infer_height(vec![
         Series::new("pattern".into(), out_pattern).into(),
         Series::new("TcRa_alignment_score".into(), out_self_a).into(),
         Series::new("TcRb_alignment_score".into(), out_self_b).into(),
@@ -178,7 +190,7 @@ fn downsample_vec(
             full = v.len(),
             maxg = MAX_GROUP_SEQS
         ));
-        v.choose_multiple(rng, MAX_GROUP_SEQS).cloned().collect()
+        v.sample(rng, MAX_GROUP_SEQS).cloned().collect()
     } else {
         v
     };
@@ -297,10 +309,8 @@ fn calculate_scores(
                 let mut greater_count = 0usize;
                 if a.len() > 1 && n_val > 0 && !self_a_mean.is_nan() {
                     for _rep in 0..n_replicates {
-                        let background: Vec<String> = all_unique_alpha
-                            .choose_multiple(rng, n_val)
-                            .cloned()
-                            .collect();
+                        let background: Vec<String> =
+                            all_unique_alpha.sample(rng, n_val).cloned().collect();
 
                         let bg_mean = match run_parasail(&aligner, &a, Some(&background)) {
                             Ok(mean) => mean,
