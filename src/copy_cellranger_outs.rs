@@ -216,6 +216,7 @@ fn copy_outputs_for_pipestance(
         if mex {
             let src_dir = sample_dir.join(PATH_TO_COUNT_MEX);
             let dst_dir = dest.join(sample_name);
+            let dst_dir_preexisted = dst_dir.exists();
             if let Err(e) = fs::create_dir_all(&dst_dir) {
                 eprintln!("Failed to create {}: {}", dst_dir.display(), e);
             } else if src_dir.is_dir() {
@@ -239,16 +240,20 @@ fn copy_outputs_for_pipestance(
                     }
                     Err(e) => {
                         eprintln!("Failed to read {}: {}", src_dir.display(), e);
-                        // Remove the new directory if we cannot read the source
-                        if let Err(e) = fs::remove_dir(&dst_dir) {
-                            eprintln!("Failed to remove {}: {}", dst_dir.display(), e);
+                        // Only remove the destination directory if it was created in this run
+                        if !dst_dir_preexisted {
+                            if let Err(e) = fs::remove_dir(&dst_dir) {
+                                eprintln!("Failed to remove {}: {}", dst_dir.display(), e);
+                            }
                         }
                     }
                 }
             } else {
-                // Source MEX missing; remove created empty dir
-                if let Err(e) = fs::remove_dir(&dst_dir) {
-                    eprintln!("Failed to remove {}: {}", dst_dir.display(), e);
+                // Source MEX missing; remove created empty dir only if new
+                if !dst_dir_preexisted {
+                    if let Err(e) = fs::remove_dir(&dst_dir) {
+                        eprintln!("Failed to remove {}: {}", dst_dir.display(), e);
+                    }
                 }
             }
         }
