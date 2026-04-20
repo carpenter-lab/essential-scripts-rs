@@ -11,7 +11,7 @@ pub enum Commands {
     #[command(about = "Score a GLIPH2 output file with a TCR alignment pipeline")]
     ScoreTCRAlignments {
         #[arg(required = true, help = "Input CSV file to process")]
-        input_file: String,
+        input_file: PathBuf,
 
         #[arg(required = true, help = "Output file path")]
         output_file: PathBuf,
@@ -51,8 +51,8 @@ impl Run for DataFrame {
     }
 }
 
-pub(crate) fn tcr_score(input_file: &str, output_file: &PathBuf, replicates: usize) -> () {
-    let df = LazyCsvReader::new(PlPath::new(input_file))
+pub(crate) fn tcr_score(input_file: PathBuf, output_file: PathBuf, replicates: usize) -> () {
+    let df = LazyCsvReader::new(PlRefPath::try_from_pathbuf(input_file).unwrap())
         .finish()
         .unwrap()
         .collect()
@@ -78,7 +78,7 @@ pub fn handle_command(cmd: Commands) -> () {
             output_file,
             replicates,
         } => {
-            tcr_score(&input_file, &output_file, replicates);
+            tcr_score(input_file, output_file, replicates);
         }
     }
 }

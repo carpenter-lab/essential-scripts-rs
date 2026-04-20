@@ -72,7 +72,7 @@ fn split_col<'a>(
     let gene_series = df.column(col_name)?;
     let new_series = get_gene(gene_series, fct_series)?;
 
-    df.drop(col_name)?.with_column(new_series).cloned()
+    df.drop(col_name)?.with_column(new_series.into()).cloned()
 }
 
 fn factor_groups(df: &LazyFrame, group: Vec<&str>) -> Series {
@@ -131,8 +131,8 @@ fn split_cdr3_seq(df: LazyFrame, group: &[&str], chain: &str) -> PolarsResult<La
 }
 
 pub(crate) fn split_cdr3_seq_main(
-    input_file: &PathBuf,
-    output_file: &PathBuf,
+    input_file: PathBuf,
+    output_file: PathBuf,
     group: Vec<String>,
 ) -> () {
     let mut df: LazyFrame = io::read_from_file(input_file, None);
@@ -152,8 +152,8 @@ pub(crate) fn split_cdr3_seq_main(
 }
 
 pub(crate) fn split_sample_id(
-    input_file: &PathBuf,
-    output_file: &PathBuf,
+    input_file: PathBuf,
+    output_file: PathBuf,
     column_name: &String,
 ) -> () {
     let df = io::read_from_file(input_file, None);
@@ -177,14 +177,123 @@ pub fn handle_command(cmd: Commands) -> () {
             output_file,
             column_name,
         } => {
-            split_sample_id(&input_file, &output_file, &column_name);
+            split_sample_id(input_file, output_file, &column_name);
         }
         Commands::SplitCdr3Seq {
             input_file,
             output_file,
             group,
         } => {
-            split_cdr3_seq_main(&input_file, &output_file, group);
+            split_cdr3_seq_main(input_file, output_file, group);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_file_path(prefix: &str, suffix: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        path.push(format!(
+            "{}_{}_{}{}",
+            prefix,
+            std::process::id(),
+            nanos,
+            suffix
+        ));
+        path
+    }
+
+    #[test]
+    fn get_gene_splits_by_factor_index() {
+        let gene_series = Series::new("TRAV".into(), &[Some("A;B"), Some("C;D"), None]);
+        let gene_col: Column = gene_series.into();
+        let fct_series = Series::new("fct".into(), &[0i64, 1i64, 0i64]);
+
+        let out = get_gene(&gene_col, &fct_series).unwrap();
+        let out_ca = out.str().unwrap();
+
+        assert_eq!(out_ca.get(0), Some("A"));
+        assert_eq!(out_ca.get(1), Some("D"));
+        assert_eq!(out_ca.get(2), None);
+    }
+
+    #[test]
+    fn split_col_noop_when_missing() {
+        let df =
+            DataFrame::new_infer_height(vec![Series::new("foo".into(), &["x", "y"]).into_column()])
+                .unwrap();
+        let fct_series = Series::new("fct".into(), &[0i64, 1i64]);
+
+        let out = split_col(df.clone(), &PlSmallStr::from("bar"), &fct_series).unwrap();
+
+        assert_eq!(out.get_column_names(), df.get_column_names());
+        assert_eq!(out.height(), df.height());
+    }
+
+    #[test]
+    fn split_col_replaces_values() {
+        let df = DataFrame::new_infer_height(vec![
+            Series::new("TRAV".into(), &["AV1;AV2", "AV3;AV4"]).into_column(),
+        ])
+        .unwrap();
+        let fct_series = Series::new("fct".into(), &[0i64, 1i64]);
+
+        let out = split_col(df, &PlSmallStr::from("TRAV"), &fct_series).unwrap();
+        let out_ca = out.column("TRAV").unwrap().str().unwrap();
+
+        assert_eq!(out_ca.get(0), Some("AV1"));
+        assert_eq!(out_ca.get(1), Some("AV4"));
+        assert!(out_ca.into_iter().flatten().all(|v| !v.contains(';')));
+    }
+
+    #[test]
+    fn split_cdr3_seq_rejects_invalid_chain() {
+        let df = DataFrame::new_infer_height(vec![
+            Series::new("subject".into(), &["s1", "s2"]).into_column(),
+            Series::new("TRAV".into(), &["AV1;AV2", "AV3;AV4"]).into_column(),
+            Series::new("TRAJ".into(), &["AJ1;AJ2", "AJ3;AJ4"]).into_column(),
+            Series::new("CDR3a".into(), &["CAA;CAB", "CCA;CCD"]).into_column(),
+        ])
+        .unwrap();
+        let lf = df.lazy();
+
+        match split_cdr3_seq(lf, &["subject"], "gamma") {
+            Err(PolarsError::ComputeError(_)) => {}
+            Err(_) => panic!("unexpected error type"),
+            Ok(_) => panic!("expected error for invalid chain"),
+        }
+    }
+
+    #[test]
+    fn split_sample_id_end_to_end() {
+        let input_path = temp_file_path("split_sample_id_input", ".csv");
+        let output_path = temp_file_path("split_sample_id_output", ".csv");
+
+        let csv = "sample\nsub1:condA\nsub2:condB\n";
+        fs::write(&input_path, csv).unwrap();
+
+        split_sample_id(input_path, output_path.clone(), &"sample".to_string());
+
+        let out_df = io::read_from_csv(output_path).collect().unwrap();
+        let columns = out_df.get_column_names();
+
+        assert!(columns.iter().any(|name| name.as_str() == "subject"));
+        assert!(columns.iter().any(|name| name.as_str() == "condition"));
+        assert!(!columns.iter().any(|name| name.as_str() == "sample"));
+
+        let subject = out_df.column("subject").unwrap().str().unwrap();
+        let condition = out_df.column("condition").unwrap().str().unwrap();
+        assert_eq!(subject.get(0), Some("sub1"));
+        assert_eq!(condition.get(0), Some("condA"));
+        assert_eq!(subject.get(1), Some("sub2"));
+        assert_eq!(condition.get(1), Some("condB"));
     }
 }

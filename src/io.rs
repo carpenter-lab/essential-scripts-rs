@@ -1,5 +1,6 @@
 use calamine::{Reader, Xlsx, open_workbook};
 use polars::prelude::*;
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
 
 fn get_extension_from_filename(filename: &PathBuf) -> Option<&str> {
@@ -23,20 +24,39 @@ fn write_df_output(df: &mut DataFrame, output_file: &PathBuf, separator: u8) {
     }
 }
 
-fn write_lazy_output(lf: LazyFrame, output_file: &PathBuf, separator: u8) {
+fn write_lazy_output(lf: LazyFrame, output_file: PathBuf, separator: u8) {
     if output_file == Path::new("-") {
         let mut df = lf
             .collect()
             .expect("Failed to collect lazy frame prior to writing to stdout");
-        write_df_output(&mut df, output_file, separator);
+        write_df_output(&mut df, &output_file, separator);
     } else {
-        let mut writer_opts = CsvWriterOptions::default();
-        writer_opts.serialize_options.separator = separator;
-        lf.sink_csv(
-            SinkTarget::Path(PlPath::new(output_file.to_str().unwrap())),
-            writer_opts,
-            None,
-            SinkOptions::default(),
+        let writer_opts = CsvWriterOptions {
+            include_bom: false,
+            compression: ExternalCompression::default(),
+            check_extension: false,
+            include_header: false,
+            batch_size: NonZero::new(1024).unwrap(),
+            serialize_options: Arc::from(SerializeOptions {
+                date_format: None,
+                time_format: None,
+                datetime_format: None,
+                float_scientific: None,
+                float_precision: None,
+                decimal_comma: false,
+                separator,
+                quote_char: 0,
+                null: Default::default(),
+                line_terminator: Default::default(),
+                quote_style: Default::default(),
+            }),
+        };
+        lf.sink(
+            SinkDestination::File {
+                target: SinkTarget::Path(PlRefPath::try_from_pathbuf(output_file).unwrap()),
+            },
+            FileWriteFormat::Csv(writer_opts),
+            UnifiedSinkArgs::default(),
         )
         .expect("Failed to open to CSV file for writing")
         .collect()
@@ -45,9 +65,9 @@ fn write_lazy_output(lf: LazyFrame, output_file: &PathBuf, separator: u8) {
 }
 
 pub trait WriteToCsvOrStdout {
-    fn write_to_csv_or_stdout(self, output_file: &PathBuf) -> ();
-    fn write_to_tsv_or_stdout(self, output_file: &PathBuf) -> ();
-    fn write_to_flat_or_stdout(self, output_file: &PathBuf, separator: Option<u8>) -> ()
+    fn write_to_csv_or_stdout(self, output_file: PathBuf) -> ();
+    fn write_to_tsv_or_stdout(self, output_file: PathBuf) -> ();
+    fn write_to_flat_or_stdout(self, output_file: PathBuf, separator: Option<u8>) -> ()
     where
         Self: Sized,
     {
@@ -57,7 +77,7 @@ pub trait WriteToCsvOrStdout {
                 b',' => self.write_to_csv_or_stdout(output_file),
                 _ => panic!("Unsupported separator"),
             },
-            _ => match get_extension_from_filename(output_file) {
+            _ => match get_extension_from_filename(&output_file) {
                 Some(v) => match v {
                     "tsv" => self.write_to_tsv_or_stdout(output_file),
                     _ => self.write_to_csv_or_stdout(output_file),
@@ -69,47 +89,47 @@ pub trait WriteToCsvOrStdout {
 }
 
 impl WriteToCsvOrStdout for DataFrame {
-    fn write_to_csv_or_stdout(mut self, output_file: &PathBuf) -> () {
-        write_df_output(&mut self, output_file, b',');
+    fn write_to_csv_or_stdout(mut self, output_file: PathBuf) -> () {
+        write_df_output(&mut self, &output_file, b',');
     }
-    fn write_to_tsv_or_stdout(mut self, output_file: &PathBuf) -> () {
-        write_df_output(&mut self, output_file, b'\t');
+    fn write_to_tsv_or_stdout(mut self, output_file: PathBuf) -> () {
+        write_df_output(&mut self, &output_file, b'\t');
     }
 }
 impl WriteToCsvOrStdout for LazyFrame {
-    fn write_to_csv_or_stdout(self, output_file: &PathBuf) -> () {
+    fn write_to_csv_or_stdout(self, output_file: PathBuf) -> () {
         write_lazy_output(self, output_file, b',');
     }
-    fn write_to_tsv_or_stdout(self, output_file: &PathBuf) -> () {
+    fn write_to_tsv_or_stdout(self, output_file: PathBuf) -> () {
         write_lazy_output(self, output_file, b'\t');
     }
 }
 
-pub fn read_from_csv(input_file: &PathBuf) -> LazyFrame {
-    match LazyCsvReader::new(PlPath::new(input_file.to_str().unwrap())).finish() {
+pub fn read_from_csv(input_file: PathBuf) -> LazyFrame {
+    match LazyCsvReader::new(PlRefPath::try_from_pathbuf(input_file).unwrap()).finish() {
         Ok(lf) => lf,
         Err(e) => panic!("Failed to read CSV file: {}", e),
     }
 }
 
-pub fn read_from_tsv(input_file: &PathBuf) -> LazyFrame {
-    match LazyCsvReader::new(PlPath::new(input_file.to_str().unwrap())).finish() {
+pub fn read_from_tsv(input_file: PathBuf) -> LazyFrame {
+    match LazyCsvReader::new(PlRefPath::try_from_pathbuf(input_file).unwrap()).finish() {
         Ok(lf) => lf,
         Err(e) => panic!("Failed to read TSV file: {}", e),
     }
 }
 
-pub fn read_from_file(input_file: &PathBuf, separator: Option<u8>) -> LazyFrame {
+pub fn read_from_file(input_file: PathBuf, separator: Option<u8>) -> LazyFrame {
     match separator {
         Some(sep) => match sep {
             b'\t' => read_from_tsv(input_file),
             b',' => read_from_csv(input_file),
             _ => panic!("Unsupported separator"),
         },
-        _ => match get_extension_from_filename(input_file) {
+        _ => match get_extension_from_filename(&input_file) {
             Some(v) => match v {
                 "tsv" => read_from_tsv(input_file),
-                "xls" | "xlsx" => read_excel(input_file, None, 0, None)
+                "xls" | "xlsx" => read_excel(&input_file, None, 0, None)
                     .expect("Failed to read Excel file")
                     .lazy(),
                 _ => read_from_csv(input_file),
@@ -204,6 +224,6 @@ pub fn read_excel(
         series_vec.push(s.into_column());
     }
 
-    let df = DataFrame::new(series_vec);
+    let df = DataFrame::new_infer_height(series_vec);
     df
 }

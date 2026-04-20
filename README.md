@@ -9,6 +9,10 @@ To install the latest version of the package, run:
 ```bash
 cargo install --git https://github.com/carpenter-lab/essential-scripts-rs
 ```
+or 
+```bash
+cargo install --git ssh://git@github.com/carpenter-lab/essential-scripts-rs.git
+```
 
 If you need the cargo command (i.e. `cargo install`), you can install it by following the
 instructions [to install Rust](https://rust-lang.org/tools/install/).

@@ -39,30 +39,60 @@ fn process_input_lazy(df: LazyFrame, keep_alpha: bool) -> LazyFrame {
             col("cdr3")
                 .filter(col("chain").eq(lit("TRB")))
                 .alias("cdr3_TRB")
-                .flatten(),
+                .explode(ExplodeOptions {
+                    empty_as_null: false,
+                    keep_nulls: false,
+                }),
             col("v_gene")
                 .filter(col("chain").eq(lit("TRB")))
                 .alias("v_gene_TRB")
-                .flatten(),
+                .explode(ExplodeOptions {
+                    empty_as_null: false,
+                    keep_nulls: false,
+                }),
             col("j_gene")
                 .filter(col("chain").eq(lit("TRB")))
                 .alias("j_gene_TRB")
-                .flatten(),
+                .explode(ExplodeOptions {
+                    empty_as_null: false,
+                    keep_nulls: false,
+                }),
             col("cdr3")
                 .filter(col("chain").eq(lit("TRA")))
                 .alias("cdr3_TRA")
-                .flatten(),
+                .explode(ExplodeOptions {
+                    empty_as_null: false,
+                    keep_nulls: false,
+                }),
             col("v_gene")
                 .filter(col("chain").eq(lit("TRA")))
                 .alias("v_gene_TRA")
-                .flatten(),
+                .explode(ExplodeOptions {
+                    empty_as_null: false,
+                    keep_nulls: false,
+                }),
             col("j_gene")
                 .filter(col("chain").eq(lit("TRA")))
                 .alias("j_gene_TRA")
-                .flatten(),
+                .explode(ExplodeOptions {
+                    empty_as_null: false,
+                    keep_nulls: false,
+                }),
         ])
-        .explode(col("^.*_TRA$").into_selector().unwrap())
-        .explode(col("^.*_TRB$").into_selector().unwrap())
+        .explode(
+            col("^.*_TRA$").into_selector().unwrap(),
+            ExplodeOptions {
+                empty_as_null: false,
+                keep_nulls: false,
+            },
+        )
+        .explode(
+            col("^.*_TRB$").into_selector().unwrap(),
+            ExplodeOptions {
+                empty_as_null: false,
+                keep_nulls: false,
+            },
+        )
         .group_by([col("sample"), col("^.*_TRA$"), col("^.*_TRB$")])
         .agg([len().alias("count")])
         .with_column(col("sample").str().replace_all(lit("-"), lit(":"), false));
@@ -90,7 +120,7 @@ fn process_input_lazy(df: LazyFrame, keep_alpha: bool) -> LazyFrame {
 }
 
 pub(crate) fn aggregate_cellranger_tcr_output(
-    input_files: &Vec<PathBuf>,
+    input_files: Vec<PathBuf>,
     output_file: &PathBuf,
     keep_alpha: bool,
 ) -> () {
@@ -99,6 +129,7 @@ pub(crate) fn aggregate_cellranger_tcr_output(
         rechunk: true,
         to_supertypes: false,
         diagonal: false,
+        strict: false,
         from_partitioned_ds: false,
         maintain_order: true,
     };
@@ -118,7 +149,7 @@ pub(crate) fn aggregate_cellranger_tcr_output(
         .filter(col("CDR3b").is_not_null())
         .filter(col("CDR3b").neq(lit("")));
 
-    processed.write_to_csv_or_stdout(output_file)
+    processed.write_to_csv_or_stdout((*output_file.clone()).to_owned())
 }
 
 pub fn handle_command(cmd: Commands) -> () {
@@ -128,7 +159,7 @@ pub fn handle_command(cmd: Commands) -> () {
             output_file,
             keep_alpha,
         } => {
-            aggregate_cellranger_tcr_output(&input_files, &output_file, keep_alpha);
+            aggregate_cellranger_tcr_output(input_files, &output_file, keep_alpha);
         }
     }
 }
