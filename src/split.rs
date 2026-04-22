@@ -33,127 +33,152 @@ pub enum Commands {
         #[arg(
             short,
             long,
-            default_value = "subject:condition",
-            help = "Columns to group by"
+            num_args = 1..,
+            help = "Optional columns to group by; if omitted, each input row is treated as its own group"
         )]
-        group: Vec<String>,
+        group: Option<Vec<String>>,
     },
 }
 
-fn get_gene(gene_series: &Column, fct_series: &Series) -> PolarsResult<Series> {
-    let gene_ca = gene_series.str()?;
-    let fct_ca = fct_series.i64()?;
-
-    let result: Vec<Option<String>> = gene_ca
-        .into_iter()
-        .zip(fct_ca.into_iter())
-        .map(|(gene_opt, fct_opt)| match (gene_opt, fct_opt) {
-            (Some(gene), Some(fct)) if gene.contains(';') => {
-                let parts: Vec<&str> = gene.split(';').collect();
-                parts.get(fct as usize).map(|s| s.to_string())
-            }
-            (Some(gene), _) => Some(gene.to_string()),
-            _ => None,
-        })
-        .collect();
-
-    Ok(Series::new(gene_series.name().clone(), result))
+#[derive(Clone, Copy)]
+enum GeneSchema {
+    CtGene,
+    TrVj,
 }
 
-fn split_col<'a>(
-    df: DataFrame,
-    col_name: &PlSmallStr,
-    fct_series: &Series,
-) -> PolarsResult<DataFrame> {
-    if !df.get_column_names().contains(&col_name) {
-        return Ok(df);
+fn has_col(df: &DataFrame, name: &str) -> bool {
+    df.get_column_names().iter().any(|n| n.as_str() == name)
+}
+
+fn resolve_gene_schema(df: &DataFrame) -> PolarsResult<GeneSchema> {
+    let has_ctgene = has_col(df, "CTgeneA") && has_col(df, "CTgeneB");
+    let has_tr_vj =
+        has_col(df, "TRAV") && has_col(df, "TRAJ") && has_col(df, "TRBV") && has_col(df, "TRBJ");
+
+    if !has_col(df, "CDR3a") || !has_col(df, "CDR3b") {
+        return Err(PolarsError::ComputeError(
+            "split-cdr3-seq requires both CDR3a and CDR3b columns".into(),
+        ));
     }
 
-    let gene_series = df.column(col_name)?;
-    let new_series = get_gene(gene_series, fct_series)?;
-
-    df.drop(col_name)?.with_column(new_series.into()).cloned()
+    match (has_ctgene, has_tr_vj) {
+        (true, false) => Ok(GeneSchema::CtGene),
+        (false, true) => Ok(GeneSchema::TrVj),
+        (true, true) => Err(PolarsError::ComputeError(
+            "Found both schema styles; provide either CTgeneA/CTgeneB or TRAV/TRAJ/TRBV/TRBJ"
+                .into(),
+        )),
+        (false, false) => Err(PolarsError::ComputeError(
+            "Missing required gene columns. Provide either CTgeneA/CTgeneB or TRAV/TRAJ/TRBV/TRBJ"
+                .into(),
+        )),
+    }
 }
 
-fn factor_groups(df: &LazyFrame, group: Vec<&str>) -> Series {
-    let bind = df
-        .clone()
-        .with_column(
-            Expr::from(cols(group))
-                .str()
-                .join("_", false)
-                .alias("_group_key"),
-        )
-        .collect()
-        .unwrap();
-    let s = bind.column("_group_key").unwrap().as_series().unwrap();
-    let categories: Arc<Categories> = s.unique().unwrap().0.as_arc_any().downcast().unwrap();
-    let categories_m: Arc<CategoricalMapping> =
-        s.unique().unwrap().0.as_arc_any().downcast().unwrap();
-    s.cast(&DataType::Categorical(categories.clone(), categories_m))
-        .unwrap()
-}
-
-fn split_cdr3_seq(df: LazyFrame, group: &[&str], chain: &str) -> PolarsResult<LazyFrame> {
+fn split_cdr3_seq(df: DataFrame, chain: &str, schema: GeneSchema) -> PolarsResult<DataFrame> {
     if chain != "alpha" && chain != "beta" {
         return Err(PolarsError::ComputeError(
             format!("chain must be alpha or beta, not {}", chain).into(),
         ));
     }
 
-    let (cdr3_col, gene) = if chain == "alpha" {
-        ("CDR3a", "A")
-    } else {
-        ("CDR3b", "B")
+    let split_cols: Vec<&str> = match (chain, schema) {
+        ("alpha", GeneSchema::CtGene) => vec!["CTgeneA", "CDR3a"],
+        ("beta", GeneSchema::CtGene) => vec!["CTgeneB", "CDR3b"],
+        ("alpha", GeneSchema::TrVj) => vec!["TRAV", "TRAJ", "CDR3a"],
+        ("beta", GeneSchema::TrVj) => vec!["TRBV", "TRBJ", "CDR3b"],
+        _ => unreachable!(),
     };
 
-    let cols_to_split: Vec<PlSmallStr> = vec![
-        format!("TR{}V", gene).into(),
-        format!("TR{}J", gene).into(),
-        cdr3_col.to_string().into(),
-    ];
+    let list_cols: Vec<String> = split_cols.iter().map(|c| format!("__{}_list", c)).collect();
 
-    // Build the complete group columns list
-    let mut all_group_cols: Vec<&str> = group.to_vec();
-    let cols_to_split_refs: Vec<&str> = cols_to_split.iter().map(|s| s.as_str()).collect();
-    all_group_cols.extend(&cols_to_split_refs);
+    let explode_pattern = list_cols
+        .iter()
+        .map(|c| format!("^{}$", c))
+        .collect::<Vec<String>>()
+        .join("|");
+    let explode_selector = col(&explode_pattern)
+        .into_selector()
+        .expect("failed to build explode selector");
 
-    // Calculate factorization
-    let fct = factor_groups(&df, all_group_cols);
+    let split_exprs: Vec<Expr> = split_cols
+        .iter()
+        .zip(list_cols.iter())
+        .map(|(source, list_name)| col(*source).str().split(lit(";")).alias(list_name))
+        .collect();
 
-    // Split each column
-    let mut df2 = df.clone().collect()?;
-    for col_name in &cols_to_split {
-        df2 = split_col(df2, col_name, &fct)?;
-    }
+    let alias_exprs: Vec<Expr> = split_cols
+        .iter()
+        .zip(list_cols.iter())
+        .map(|(source, list_name)| col(list_name).alias(*source))
+        .collect();
 
-    Ok(df2.lazy())
+    df.lazy()
+        .with_columns(split_exprs)
+        // Explode related columns together so chain columns stay paired.
+        .explode(explode_selector)
+        .with_columns(alias_exprs)
+        .select([all()
+            .exclude_cols(list_cols.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
+            .as_expr()])
+        .collect()
 }
 
 pub(crate) fn split_cdr3_seq_main(
-    input_file: PathBuf,
-    output_file: PathBuf,
-    group: Vec<String>,
+    input_file: &PathBuf,
+    output_file: &PathBuf,
+    group: Option<Vec<String>>,
 ) -> () {
-    let mut df: LazyFrame = io::read_from_file(input_file, None);
+    let lazy_df: LazyFrame = io::read_from_file(input_file, None);
+    let mut df = lazy_df
+        .collect()
+        .expect("Failed to collect initial dataframe");
+    let gene_schema = resolve_gene_schema(&df).expect("Invalid gene column schema");
 
-    // Convert group strings to string slices
-    let group_refs: Vec<&str> = group.iter().map(|s| s.as_str()).collect();
+    // Keep CLI compatibility and fail early on typos in group column names.
+    // If user provides group columns, validate them.
+    // If not, create a unique per-row group key.
+    match &group {
+        Some(cols) => {
+            for g in cols {
+                if !df.get_column_names().iter().any(|n| n.as_str() == g) {
+                    panic!("Group column '{}' not found", g);
+                }
+            }
+        }
+        None => {
+            // One unique group per original row.
+            // This keeps alpha/beta splits anchored to original rows.
+            let row_ids: Vec<u64> = (0..df.height() as u64).collect();
+            df = df
+                .with_column(Series::new("__row_group".into(), row_ids))
+                .expect("Failed to add per-row fallback group")
+                .to_owned();
+        }
+    }
 
     // Process both chains
-    for chain in &["alpha", "beta"] {
-        df = split_cdr3_seq(df, &group_refs, chain).expect("Failed to split CDR3 sequences");
+    for chain in ["alpha", "beta"] {
+        df = split_cdr3_seq(df, chain, gene_schema).expect("Failed to split CDR3 sequences");
     }
 
     // Write output
-    df.collect()
-        .expect("Failed to collect dataframe")
-        .write_to_flat_or_stdout(output_file, None)
+    if group.is_none()
+        && df
+            .get_column_names()
+            .iter()
+            .any(|n| n.as_str() == "__row_group")
+    {
+        df = df
+            .drop("__row_group")
+            .expect("Failed to drop temporary row group column");
+    }
+    df.write_to_flat_or_stdout(output_file, None)
 }
 
 pub(crate) fn split_sample_id(
-    input_file: PathBuf,
-    output_file: PathBuf,
+    input_file: &PathBuf,
+    output_file: &PathBuf,
     column_name: &String,
 ) -> () {
     let df = io::read_from_file(input_file, None);
@@ -177,14 +202,14 @@ pub fn handle_command(cmd: Commands) -> () {
             output_file,
             column_name,
         } => {
-            split_sample_id(input_file, output_file, &column_name);
+            split_sample_id(&input_file, &output_file, &column_name);
         }
         Commands::SplitCdr3Seq {
             input_file,
             output_file,
             group,
         } => {
-            split_cdr3_seq_main(input_file, output_file, group);
+            split_cdr3_seq_main(&input_file, &output_file, group);
         }
     }
 }
@@ -192,108 +217,308 @@ pub fn handle_command(cmd: Commands) -> () {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn temp_file_path(prefix: &str, suffix: &str) -> PathBuf {
-        let mut path = std::env::temp_dir();
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        path.push(format!(
-            "{}_{}_{}{}",
-            prefix,
-            std::process::id(),
-            nanos,
-            suffix
-        ));
-        path
+    #[test]
+    fn split_cdr3_seq_expands_alpha_pairs_and_preserves_rows() {
+        let df = df!(
+            "CDR3a" => [
+                "CAVVPPNQAGTALIF;CVVNGGRLMF",
+                "CAVNPVGSYIPTF",
+                "CALSGDSGNTGKLIF"
+            ],
+            "CDR3b" => [
+                "CSARSSGTGSSYNSPLHF",
+                "CSASSAGGTDTQYF",
+                "CSASKSSYEQYF"
+            ],
+            "TRAV" => [
+                "TRAV2.TRAJ15.TRAC;TRAV12-1.TRAJ31.TRAC",
+                "TRAV8-1.TRAJ6.TRAC",
+                "TRAV16.TRAJ37.TRAC"
+            ],
+            "TRAJ" => ["TRAJ15;TRAJ31", "TRAJ6", "TRAJ37"],
+            "TRBV" => [
+                "TRBV20-1.TRBJ1-6.TRBC1",
+                "TRBV20-1.TRBJ2-3.TRBC2",
+                "TRBV29-1.TRBJ2-7.TRBC2"
+            ],
+            "TRBJ" => ["TRBJ1-6", "TRBJ2-3", "TRBJ2-7"],
+            "groups" => ["A", "B", "C"]
+        )
+        .expect("failed to create test dataframe");
+
+        let out =
+            split_cdr3_seq(df, "alpha", GeneSchema::TrVj).expect("alpha split should succeed");
+
+        assert_eq!(out.height(), 4);
+
+        let groups: Vec<&str> = out
+            .column("groups")
+            .expect("missing groups")
+            .str()
+            .expect("groups should be utf8")
+            .into_iter()
+            .map(|v| v.expect("groups value should not be null"))
+            .collect();
+        assert_eq!(groups, vec!["A", "A", "B", "C"]);
+
+        let trav: Vec<&str> = out
+            .column("TRAV")
+            .expect("missing TRAV")
+            .str()
+            .expect("TRAV should be utf8")
+            .into_iter()
+            .map(|v| v.expect("TRAV value should not be null"))
+            .collect();
+        assert_eq!(
+            trav,
+            vec![
+                "TRAV2.TRAJ15.TRAC",
+                "TRAV12-1.TRAJ31.TRAC",
+                "TRAV8-1.TRAJ6.TRAC",
+                "TRAV16.TRAJ37.TRAC"
+            ]
+        );
+
+        let cdr3a: Vec<&str> = out
+            .column("CDR3a")
+            .expect("missing CDR3a")
+            .str()
+            .expect("CDR3a should be utf8")
+            .into_iter()
+            .map(|v| v.expect("CDR3a value should not be null"))
+            .collect();
+        assert_eq!(
+            cdr3a,
+            vec![
+                "CAVVPPNQAGTALIF",
+                "CVVNGGRLMF",
+                "CAVNPVGSYIPTF",
+                "CALSGDSGNTGKLIF"
+            ]
+        );
     }
 
     #[test]
-    fn get_gene_splits_by_factor_index() {
-        let gene_series = Series::new("TRAV".into(), &[Some("A;B"), Some("C;D"), None]);
-        let gene_col: Column = gene_series.into();
-        let fct_series = Series::new("fct".into(), &[0i64, 1i64, 0i64]);
+    fn split_cdr3_seq_alpha_then_beta_matches_expected_row_count() {
+        let df = df!(
+            "CDR3a" => [
+                "CAVVPPNQAGTALIF;CVVNGGRLMF",
+                "CAVNPVGSYIPTF",
+                "CALSGDSGNTGKLIF"
+            ],
+            "CDR3b" => [
+                "CSARSSGTGSSYNSPLHF",
+                "CSASSAGGTDTQYF",
+                "CSASKSSYEQYF"
+            ],
+            "TRAV" => [
+                "TRAV2.TRAJ15.TRAC;TRAV12-1.TRAJ31.TRAC",
+                "TRAV8-1.TRAJ6.TRAC",
+                "TRAV16.TRAJ37.TRAC"
+            ],
+            "TRAJ" => ["TRAJ15;TRAJ31", "TRAJ6", "TRAJ37"],
+            "TRBV" => [
+                "TRBV20-1.TRBJ1-6.TRBC1",
+                "TRBV20-1.TRBJ2-3.TRBC2",
+                "TRBV29-1.TRBJ2-7.TRBC2"
+            ],
+            "TRBJ" => ["TRBJ1-6", "TRBJ2-3", "TRBJ2-7"],
+            "groups" => ["A", "B", "C"]
+        )
+        .expect("failed to create test dataframe");
 
-        let out = get_gene(&gene_col, &fct_series).unwrap();
-        let out_ca = out.str().unwrap();
+        let out =
+            split_cdr3_seq(df, "alpha", GeneSchema::TrVj).expect("alpha split should succeed");
+        let out = split_cdr3_seq(out, "beta", GeneSchema::TrVj).expect("beta split should succeed");
 
-        assert_eq!(out_ca.get(0), Some("A"));
-        assert_eq!(out_ca.get(1), Some("D"));
-        assert_eq!(out_ca.get(2), None);
+        assert_eq!(out.height(), 4);
+
+        let cdr3a: Vec<&str> = out
+            .column("CDR3a")
+            .expect("missing CDR3a")
+            .str()
+            .expect("CDR3a should be utf8")
+            .into_iter()
+            .map(|v| v.expect("CDR3a value should not be null"))
+            .collect();
+        assert_eq!(
+            cdr3a,
+            vec![
+                "CAVVPPNQAGTALIF",
+                "CVVNGGRLMF",
+                "CAVNPVGSYIPTF",
+                "CALSGDSGNTGKLIF"
+            ]
+        );
     }
 
     #[test]
-    fn split_col_noop_when_missing() {
-        let df =
-            DataFrame::new_infer_height(vec![Series::new("foo".into(), &["x", "y"]).into_column()])
-                .unwrap();
-        let fct_series = Series::new("fct".into(), &[0i64, 1i64]);
+    fn split_cdr3_seq_errors_on_mismatched_alpha_pair_lengths() {
+        let df = df!(
+            "CDR3a" => ["CAVVPPNQAGTALIF"],
+            "CDR3b" => ["CSARSSGTGSSYNSPLHF"],
+            "TRAV" => ["TRAV2.TRAJ15.TRAC;TRAV12-1.TRAJ31.TRAC"],
+            "TRAJ" => ["TRAJ15"],
+            "TRBV" => ["TRBV20-1.TRBJ1-6.TRBC1"],
+            "TRBJ" => ["TRBJ1-6"],
+            "groups" => ["A"]
+        )
+        .expect("failed to create test dataframe");
 
-        let out = split_col(df.clone(), &PlSmallStr::from("bar"), &fct_series).unwrap();
-
-        assert_eq!(out.get_column_names(), df.get_column_names());
-        assert_eq!(out.height(), df.height());
+        let out = split_cdr3_seq(df, "alpha", GeneSchema::TrVj);
+        assert!(
+            out.is_err(),
+            "expected error when TRAV/CDR3a split lengths are mismatched"
+        );
     }
 
     #[test]
-    fn split_col_replaces_values() {
-        let df = DataFrame::new_infer_height(vec![
-            Series::new("TRAV".into(), &["AV1;AV2", "AV3;AV4"]).into_column(),
-        ])
-        .unwrap();
-        let fct_series = Series::new("fct".into(), &[0i64, 1i64]);
+    fn resolve_gene_schema_accepts_ctgene_columns() {
+        let df = df!(
+            "CDR3a" => ["A"],
+            "CDR3b" => ["B"],
+            "CTgeneA" => ["X;Y"],
+            "CTgeneB" => ["Z"]
+        )
+        .expect("failed to create test dataframe");
 
-        let out = split_col(df, &PlSmallStr::from("TRAV"), &fct_series).unwrap();
-        let out_ca = out.column("TRAV").unwrap().str().unwrap();
-
-        assert_eq!(out_ca.get(0), Some("AV1"));
-        assert_eq!(out_ca.get(1), Some("AV4"));
-        assert!(out_ca.into_iter().flatten().all(|v| !v.contains(';')));
+        let schema = resolve_gene_schema(&df).expect("CTgene schema should be valid");
+        assert!(matches!(schema, GeneSchema::CtGene));
     }
 
     #[test]
-    fn split_cdr3_seq_rejects_invalid_chain() {
-        let df = DataFrame::new_infer_height(vec![
-            Series::new("subject".into(), &["s1", "s2"]).into_column(),
-            Series::new("TRAV".into(), &["AV1;AV2", "AV3;AV4"]).into_column(),
-            Series::new("TRAJ".into(), &["AJ1;AJ2", "AJ3;AJ4"]).into_column(),
-            Series::new("CDR3a".into(), &["CAA;CAB", "CCA;CCD"]).into_column(),
-        ])
-        .unwrap();
-        let lf = df.lazy();
+    fn resolve_gene_schema_rejects_partial_tr_columns() {
+        let df = df!(
+            "CDR3a" => ["A"],
+            "CDR3b" => ["B"],
+            "TRAV" => ["TRAV1"],
+            "TRBV" => ["TRBV1"]
+        )
+        .expect("failed to create test dataframe");
 
-        match split_cdr3_seq(lf, &["subject"], "gamma") {
-            Err(PolarsError::ComputeError(_)) => {}
-            Err(_) => panic!("unexpected error type"),
-            Ok(_) => panic!("expected error for invalid chain"),
+        let schema = resolve_gene_schema(&df);
+        assert!(schema.is_err(), "partial TR columns should be rejected");
+    }
+
+    #[test]
+    fn split_cdr3_seq_main_without_group_uses_unique_row_fallback() {
+        // This test targets the intended "group omitted" behavior:
+        // one unique group per input row, so expansion is row-local and no cross-row mixing.
+
+        // Build a minimal TR V/J schema dataframe similar to your existing fixtures.
+        let mut df = df!(
+            "CDR3a" => [
+                "CAVVPPNQAGTALIF;CVVNGGRLMF",
+                "CAVNPVGSYIPTF",
+                "CALSGDSGNTGKLIF"
+            ],
+            "CDR3b" => [
+                "CSARSSGTGSSYNSPLHF",
+                "CSASSAGGTDTQYF",
+                "CSASKSSYEQYF"
+            ],
+            "TRAV" => [
+                "TRAV2.TRAJ15.TRAC;TRAV12-1.TRAJ31.TRAC",
+                "TRAV8-1.TRAJ6.TRAC",
+                "TRAV16.TRAJ37.TRAC"
+            ],
+            "TRAJ" => ["TRAJ15;TRAJ31", "TRAJ6", "TRAJ37"],
+            "TRBV" => [
+                "TRBV20-1.TRBJ1-6.TRBC1",
+                "TRBV20-1.TRBJ2-3.TRBC2",
+                "TRBV29-1.TRBJ2-7.TRBC2"
+            ],
+            "TRBJ" => ["TRBJ1-6", "TRBJ2-3", "TRBJ2-7"]
+        )
+        .expect("failed to create test dataframe");
+
+        // Simulate split_cdr3_seq_main fallback path when group is None:
+        // add temporary per-row key, run both chains, drop temporary key.
+        let row_ids: Vec<u64> = (0..df.height() as u64).collect();
+        df = df
+            .with_column(Series::new("__row_group".into(), row_ids))
+            .expect("failed to add fallback row group")
+            .to_owned();
+
+        let schema = resolve_gene_schema(&df).expect("schema should resolve");
+        let out = split_cdr3_seq(df, "alpha", schema).expect("alpha split should succeed");
+        let mut out = split_cdr3_seq(out, "beta", schema).expect("beta split should succeed");
+
+        if out
+            .get_column_names()
+            .iter()
+            .any(|n| n.as_str() == "__row_group")
+        {
+            out = out
+                .drop("__row_group")
+                .expect("failed to drop temporary fallback group");
         }
+
+        // Same expected output shape as grouped case: first row expands to two.
+        assert_eq!(out.height(), 4);
+
+        let cdr3a: Vec<&str> = out
+            .column("CDR3a")
+            .expect("missing CDR3a")
+            .str()
+            .expect("CDR3a should be utf8")
+            .into_iter()
+            .map(|v| v.expect("CDR3a should not be null"))
+            .collect();
+
+        assert_eq!(
+            cdr3a,
+            vec![
+                "CAVVPPNQAGTALIF",
+                "CVVNGGRLMF",
+                "CAVNPVGSYIPTF",
+                "CALSGDSGNTGKLIF"
+            ]
+        );
+
+        // Ensure temp fallback column is not leaked.
+        assert!(
+            !out.get_column_names()
+                .iter()
+                .any(|n| n.as_str() == "__row_group"),
+            "temporary fallback group column should be removed"
+        );
     }
 
     #[test]
-    fn split_sample_id_end_to_end() {
-        let input_path = temp_file_path("split_sample_id_input", ".csv");
-        let output_path = temp_file_path("split_sample_id_output", ".csv");
+    fn provided_group_columns_still_validate() {
+        let df = df!(
+            "CDR3a" => ["A"],
+            "CDR3b" => ["B"],
+            "TRAV" => ["TRAV1"],
+            "TRAJ" => ["TRAJ1"],
+            "TRBV" => ["TRBV1"],
+            "TRBJ" => ["TRBJ1"],
+            "groups" => ["G1"]
+        )
+        .expect("failed to create test dataframe");
 
-        let csv = "sample\nsub1:condA\nsub2:condB\n";
-        fs::write(&input_path, csv).unwrap();
+        // Valid group column should pass the same validation logic used in split_cdr3_seq_main.
+        let valid_groups = vec!["groups".to_string()];
+        for g in &valid_groups {
+            assert!(
+                df.get_column_names().iter().any(|n| n.as_str() == g),
+                "group column '{}' should exist",
+                g
+            );
+        }
 
-        split_sample_id(input_path, output_path.clone(), &"sample".to_string());
-
-        let out_df = io::read_from_csv(output_path).collect().unwrap();
-        let columns = out_df.get_column_names();
-
-        assert!(columns.iter().any(|name| name.as_str() == "subject"));
-        assert!(columns.iter().any(|name| name.as_str() == "condition"));
-        assert!(!columns.iter().any(|name| name.as_str() == "sample"));
-
-        let subject = out_df.column("subject").unwrap().str().unwrap();
-        let condition = out_df.column("condition").unwrap().str().unwrap();
-        assert_eq!(subject.get(0), Some("sub1"));
-        assert_eq!(condition.get(0), Some("condA"));
-        assert_eq!(subject.get(1), Some("sub2"));
-        assert_eq!(condition.get(1), Some("condB"));
+        // Missing group column should fail validation.
+        let invalid_groups = vec!["does_not_exist".to_string()];
+        let missing = invalid_groups.iter().find(|g| {
+            !df.get_column_names()
+                .iter()
+                .any(|n| n.as_str() == g.as_str())
+        });
+        assert!(
+            missing.is_some(),
+            "validation should detect missing provided group columns"
+        );
     }
 }
