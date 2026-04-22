@@ -40,57 +40,57 @@ fn process_input_lazy(df: LazyFrame, keep_alpha: bool) -> LazyFrame {
                 .filter(col("chain").eq(lit("TRB")))
                 .alias("cdr3_TRB")
                 .explode(ExplodeOptions {
-                    empty_as_null: false,
-                    keep_nulls: false,
+                    empty_as_null: true,
+                    keep_nulls: true,
                 }),
             col("v_gene")
                 .filter(col("chain").eq(lit("TRB")))
                 .alias("v_gene_TRB")
                 .explode(ExplodeOptions {
-                    empty_as_null: false,
-                    keep_nulls: false,
+                    empty_as_null: true,
+                    keep_nulls: true,
                 }),
             col("j_gene")
                 .filter(col("chain").eq(lit("TRB")))
                 .alias("j_gene_TRB")
                 .explode(ExplodeOptions {
-                    empty_as_null: false,
-                    keep_nulls: false,
+                    empty_as_null: true,
+                    keep_nulls: true,
                 }),
             col("cdr3")
                 .filter(col("chain").eq(lit("TRA")))
                 .alias("cdr3_TRA")
                 .explode(ExplodeOptions {
-                    empty_as_null: false,
-                    keep_nulls: false,
+                    empty_as_null: true,
+                    keep_nulls: true,
                 }),
             col("v_gene")
                 .filter(col("chain").eq(lit("TRA")))
                 .alias("v_gene_TRA")
                 .explode(ExplodeOptions {
-                    empty_as_null: false,
-                    keep_nulls: false,
+                    empty_as_null: true,
+                    keep_nulls: true,
                 }),
             col("j_gene")
                 .filter(col("chain").eq(lit("TRA")))
                 .alias("j_gene_TRA")
                 .explode(ExplodeOptions {
-                    empty_as_null: false,
-                    keep_nulls: false,
+                    empty_as_null: true,
+                    keep_nulls: true,
                 }),
         ])
         .explode(
             col("^.*_TRA$").into_selector().unwrap(),
             ExplodeOptions {
-                empty_as_null: false,
-                keep_nulls: false,
+                empty_as_null: true,
+                keep_nulls: true,
             },
         )
         .explode(
             col("^.*_TRB$").into_selector().unwrap(),
             ExplodeOptions {
-                empty_as_null: false,
-                keep_nulls: false,
+                empty_as_null: true,
+                keep_nulls: true,
             },
         )
         .group_by([col("sample"), col("^.*_TRA$"), col("^.*_TRB$")])
@@ -309,7 +309,8 @@ mod tests {
         .unwrap()
         .sort(["sample", "CDR3b", "CDR3a"], Default::default())
         .unwrap();
-
+        println!("{:?}", df.clone());
+        println!("{:?}", df_expected.clone());
         assert_dataframe_equal!(&df, &df_expected);
     }
 }

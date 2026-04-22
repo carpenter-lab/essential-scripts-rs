@@ -14,7 +14,7 @@ calamine = "0.34"
 
 [dependencies.polars]
 version = "0.53"
-features = ["lazy", "strings", "concat_str", "timezones"]
+features = ["lazy", "strings", "concat_str", "timezones", "dtype-array"]
 
 [profile.release]
 opt-level = 3

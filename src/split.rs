@@ -116,7 +116,13 @@ fn split_cdr3_seq(df: DataFrame, chain: &str, schema: GeneSchema) -> PolarsResul
     df.lazy()
         .with_columns(split_exprs)
         // Explode related columns together so chain columns stay paired.
-        .explode(explode_selector)
+        .explode(
+            explode_selector,
+            ExplodeOptions {
+                empty_as_null: false,
+                keep_nulls: false,
+            },
+        )
         .with_columns(alias_exprs)
         .select([all()
             .exclude_cols(list_cols.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
@@ -125,8 +131,8 @@ fn split_cdr3_seq(df: DataFrame, chain: &str, schema: GeneSchema) -> PolarsResul
 }
 
 pub(crate) fn split_cdr3_seq_main(
-    input_file: &PathBuf,
-    output_file: &PathBuf,
+    input_file: PathBuf,
+    output_file: PathBuf,
     group: Option<Vec<String>>,
 ) -> () {
     let lazy_df: LazyFrame = io::read_from_file(input_file, None);
@@ -151,7 +157,7 @@ pub(crate) fn split_cdr3_seq_main(
             // This keeps alpha/beta splits anchored to original rows.
             let row_ids: Vec<u64> = (0..df.height() as u64).collect();
             df = df
-                .with_column(Series::new("__row_group".into(), row_ids))
+                .with_column(Series::new("__row_group".into(), row_ids).into())
                 .expect("Failed to add per-row fallback group")
                 .to_owned();
         }
@@ -177,8 +183,8 @@ pub(crate) fn split_cdr3_seq_main(
 }
 
 pub(crate) fn split_sample_id(
-    input_file: &PathBuf,
-    output_file: &PathBuf,
+    input_file: PathBuf,
+    output_file: PathBuf,
     column_name: &String,
 ) -> () {
     let df = io::read_from_file(input_file, None);
@@ -202,14 +208,14 @@ pub fn handle_command(cmd: Commands) -> () {
             output_file,
             column_name,
         } => {
-            split_sample_id(&input_file, &output_file, &column_name);
+            split_sample_id(input_file, output_file, &column_name);
         }
         Commands::SplitCdr3Seq {
             input_file,
             output_file,
             group,
         } => {
-            split_cdr3_seq_main(&input_file, &output_file, group);
+            split_cdr3_seq_main(input_file, output_file, group);
         }
     }
 }
@@ -437,7 +443,7 @@ mod tests {
         // add temporary per-row key, run both chains, drop temporary key.
         let row_ids: Vec<u64> = (0..df.height() as u64).collect();
         df = df
-            .with_column(Series::new("__row_group".into(), row_ids))
+            .with_column(Series::new("__row_group".into(), row_ids).into())
             .expect("failed to add fallback row group")
             .to_owned();
 
