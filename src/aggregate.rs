@@ -11,7 +11,7 @@ pub enum Commands {
         #[arg(required = true, num_args = 1.., help = "Input CSV files to process")]
         input_files: Vec<PathBuf>,
 
-        #[arg(required = true, help = "Output file path")]
+        #[arg(default_value = "-", help = "Output file path")]
         output_file: PathBuf,
 
         #[arg(
@@ -121,7 +121,7 @@ fn process_input_lazy(df: LazyFrame, keep_alpha: bool) -> LazyFrame {
 
 pub(crate) fn aggregate_cellranger_tcr_output(
     input_files: Vec<PathBuf>,
-    output_file: &PathBuf,
+    output_file: PathBuf,
     keep_alpha: bool,
 ) -> () {
     let concat_args = UnionArgs {
@@ -149,7 +149,7 @@ pub(crate) fn aggregate_cellranger_tcr_output(
         .filter(col("CDR3b").is_not_null())
         .filter(col("CDR3b").neq(lit("")));
 
-    processed.write_to_csv_or_stdout((*output_file.clone()).to_owned())
+    processed.write_to_csv_or_stdout(output_file)
 }
 
 pub fn handle_command(cmd: Commands) -> () {
@@ -159,7 +159,7 @@ pub fn handle_command(cmd: Commands) -> () {
             output_file,
             keep_alpha,
         } => {
-            aggregate_cellranger_tcr_output(input_files, &output_file, keep_alpha);
+            aggregate_cellranger_tcr_output(input_files, output_file, keep_alpha);
         }
     }
 }
