@@ -11,7 +11,7 @@ pub enum Commands {
         #[arg(required = true, num_args = 1.., help = "Input CSV file to process")]
         input_file: PathBuf,
 
-        #[arg(required = true, help = "Output file path")]
+        #[arg(default_value = "-", help = "Output file path")]
         output_file: PathBuf,
 
         #[arg(
@@ -22,12 +22,15 @@ pub enum Commands {
         )]
         column_name: String,
     },
-    #[command(about = "Split CDR3 sequences and genes if a semicolon is present")]
+    #[command(
+        about = "Split CDR3 sequences and genes if a semicolon is present",
+        after_help = "The TCR columns must be named CDR3a and CDR3b. Requires either CTgeneA/CTgeneB columns or TRAV/TRAJ/TRBV/TRBJ columns for the TCR genes. If group columns are not provided, each input row is treated as its own group and alpha/beta splits are anchored to original rows."
+    )]
     SplitCdr3Seq {
         #[arg(required = true, help = "Input CSV file to process")]
         input_file: PathBuf,
 
-        #[arg(required = true, help = "Output file path")]
+        #[arg(default_value = "-", help = "Output file path")]
         output_file: PathBuf,
 
         #[arg(
