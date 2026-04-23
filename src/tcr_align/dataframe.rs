@@ -26,7 +26,7 @@ pub(crate) fn all_unique_cdr3_alpha(all_data: &DataFrame) -> PolarsResult<Vec<St
                 .expect("could not create selector"),
             ExplodeOptions {
                 empty_as_null: false,
-                keep_nulls: false,
+                keep_nulls: true,
             },
         )
         .select([col("TcRa_list")])
@@ -58,7 +58,7 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> PolarsResult<Data
                 .expect("could not create selector"),
             ExplodeOptions {
                 empty_as_null: false,
-                keep_nulls: false,
+                keep_nulls: true,
             },
         )
         .drop(
@@ -76,7 +76,7 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> PolarsResult<Data
                 .expect("could not create selector"),
             ExplodeOptions {
                 empty_as_null: false,
-                keep_nulls: false,
+                keep_nulls: true,
             },
         )
         .drop(
