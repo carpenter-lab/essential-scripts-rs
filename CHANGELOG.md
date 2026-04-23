@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v0.2.0...v0.3.0) (2026-04-23)
+
+
+### Features
+
+* add copy_cellranger_outs command and improve error handling ([#17](https://github.com/carpenter-lab/essential-scripts-rs/issues/17)) ([d0f2f25](https://github.com/carpenter-lab/essential-scripts-rs/commit/d0f2f25a215686cc9ec6b108727a675537c9283a))
+* **cli:** add feature flag for terminal sizing in help ([30ec41e](https://github.com/carpenter-lab/essential-scripts-rs/commit/30ec41e68a9dd9272f1fe328d17a083361bcd266))
+* **cli:** update output file argument to have a default value of "-" for better usability ([7639419](https://github.com/carpenter-lab/essential-scripts-rs/commit/7639419585a6f348a6c983e1569737f7fe288ebe))
+* **split:** enhance CDR3 sequence splitting with gene schema resolution and optional grouping ([8899ce2](https://github.com/carpenter-lab/essential-scripts-rs/commit/8899ce2e87300eb92819307495a9199666880c03))
+
+
+### Bug Fixes
+
+* **dataframe:** enable keeping nulls in explode options for improved data handling ([dcb4fe6](https://github.com/carpenter-lab/essential-scripts-rs/commit/dcb4fe698afc1af2bc97112691f94f0d0843a191))
+* update explode options to handle nulls and empty values with updated polars crate ([b63f9c2](https://github.com/carpenter-lab/essential-scripts-rs/commit/b63f9c2c42d67898ff306f685faa4cf096dcf61d))
+
 ## [0.2.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v0.1.0...v0.2.0) (2026-02-06)
 
 
