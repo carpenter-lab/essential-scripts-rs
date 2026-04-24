@@ -29,3 +29,4 @@ opt-level = 3
 [dev-dependencies]
 polars-testing = "0.53"
 pretty_assertions = "1.4"
+rstest = "0.26"

@@ -2,6 +2,7 @@ use calamine::{Reader, Xlsx, open_workbook};
 use polars::prelude::*;
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 fn get_extension_from_filename(filename: &PathBuf) -> Option<&str> {
     Path::new(filename).extension().and_then(|s| s.to_str())
@@ -226,4 +227,41 @@ pub fn read_excel(
 
     let df = DataFrame::new_infer_height(series_vec);
     df
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_get_extension_from_filename() {
+        assert_eq!(
+            get_extension_from_filename(&PathBuf::from("data.csv")),
+            Some("csv")
+        );
+        assert_eq!(
+            get_extension_from_filename(&PathBuf::from("archive.tar.gz")),
+            Some("gz")
+        );
+        assert_eq!(
+            get_extension_from_filename(&PathBuf::from("no_extension")),
+            None
+        );
+        assert_eq!(get_extension_from_filename(&PathBuf::from(".bashrc")), None);
+        assert_eq!(
+            get_extension_from_filename(&PathBuf::from("/path/to/file.txt")),
+            Some("txt")
+        );
+    }
+
+    #[test]
+    fn test_strip_quotes() {
+        assert_eq!(strip_quotes("\"quoted\""), "quoted");
+        assert_eq!(strip_quotes("'single_quoted'"), "single_quoted");
+        assert_eq!(strip_quotes("not_quoted"), "not_quoted");
+        assert_eq!(strip_quotes("'mismatched\""), "'mismatched\"");
+        assert_eq!(strip_quotes(""), "");
+        assert_eq!(strip_quotes("''"), "");
+    }
 }
