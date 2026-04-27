@@ -34,21 +34,25 @@ impl Run for DataFrame {
         //let groups = dataframe::prepare_parasail_groups(self);
         match dataframe::prepare_parasail_groups(self) {
             Err(e) => {
-                println!("Error preparing parasail groups: {}", e);
+                eprintln!("Error preparing parasail groups: {}", e);
                 Err(e)
             }
             Ok(groups) => {
-                let result = dataframe::fraction_self_greater(
-                    &groups,
-                    &all_unique_alpha,
-                    n_replicates,
-                    7,
-                    1,
-                )?;
-                Ok(result)
+                dataframe::fraction_self_greater(&groups, &all_unique_alpha, n_replicates, 7, 1)
             }
         }
     }
+}
+
+fn score_df(df: &DataFrame, replicates: usize) -> PolarsResult<DataFrame> {
+    let res = df.run(replicates)?;
+    df.join(
+        &res,
+        ["pattern"],
+        ["pattern"],
+        JoinArgs::new(JoinType::Right),
+        None,
+    )
 }
 
 pub(crate) fn tcr_score(input_file: PathBuf, output_file: PathBuf, replicates: usize) -> () {
@@ -58,16 +62,7 @@ pub(crate) fn tcr_score(input_file: PathBuf, output_file: PathBuf, replicates: u
         .collect()
         .unwrap();
 
-    let res = df.run(replicates).unwrap();
-    let res = df
-        .join(
-            &res,
-            ["pattern"],
-            ["pattern"],
-            JoinArgs::new(JoinType::Right),
-            None,
-        )
-        .unwrap();
+    let res = score_df(&df, replicates).unwrap();
     res.write_to_csv_or_stdout(output_file)
 }
 
@@ -80,5 +75,36 @@ pub fn handle_command(cmd: Commands) -> () {
         } => {
             tcr_score(input_file, output_file, replicates);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn score_df_returns_expected_columns() {
+        let df = df![
+            "pattern" => ["p1", "p2"],
+            "TcRa" => [Some("A;B"), Some("C")],
+            "TcRb" => [Some("X;Y"), Some("Z")],
+        ]
+        .unwrap();
+
+        let scored = score_df(&df, 1).unwrap();
+
+        let cols: HashSet<_> = scored
+            .get_column_names()
+            .into_iter()
+            .map(|s| s.as_str().to_string())
+            .collect();
+
+        assert!(cols.contains("pattern"));
+        assert!(cols.contains("TcRa"));
+        assert!(cols.contains("TcRb"));
+        assert!(cols.contains("TcRa_alignment_score"));
+        assert!(cols.contains("TcRb_alignment_score"));
+        assert!(cols.contains("TcRa_alignment_score_v_background"));
     }
 }

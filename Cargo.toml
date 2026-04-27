@@ -30,3 +30,5 @@ opt-level = 3
 polars-testing = "0.53"
 pretty_assertions = "1.4"
 rstest = "0.26"
+tempfile = "3.27"
+assert_cmd = "2.0"

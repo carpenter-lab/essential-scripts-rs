@@ -11,7 +11,7 @@ pub enum Commands {
         #[arg(required = true, num_args = 1.., help = "Input CSV files to process")]
         input_files: Vec<PathBuf>,
 
-        #[arg(default_value = "-", help = "Output file path")]
+        #[arg(help = "Output file path")]
         output_file: PathBuf,
 
         #[arg(
@@ -309,8 +309,6 @@ mod tests {
         .unwrap()
         .sort(["sample", "CDR3b", "CDR3a"], Default::default())
         .unwrap();
-        println!("{:?}", df.clone());
-        println!("{:?}", df_expected.clone());
         assert_dataframe_equal!(&df, &df_expected);
     }
 }

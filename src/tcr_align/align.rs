@@ -84,13 +84,18 @@ pub fn run_parasail<S: AsRef<str>>(
 mod tests {
     use super::*;
     use polars::error::PolarsError;
+    use rstest::{fixture, rstest};
 
     const GAP_OPEN: i32 = 10;
     const GAP_EXTEND: i32 = 1;
 
-    #[test]
-    fn empty_input_returns_err() {
-        let aligner = build_protein_aligner(GAP_OPEN, GAP_EXTEND).expect("aligner build");
+    #[fixture]
+    fn protien_align_fixture() -> Aligner {
+        build_protein_aligner(GAP_OPEN, GAP_EXTEND).expect("aligner build")
+    }
+
+    #[rstest]
+    fn empty_input_returns_err(#[from(protien_align_fixture)] aligner: Aligner) {
         let res = run_parasail(&aligner, &[] as &[&str], None);
         assert!(res.is_err(), "expected error for empty input");
         match res {
@@ -103,25 +108,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn empty_reference_produces_nan() {
-        let aligner = build_protein_aligner(GAP_OPEN, GAP_EXTEND).expect("aligner build");
+    #[rstest]
+    fn empty_reference_produces_nan(#[from(protien_align_fixture)] aligner: Aligner) {
         let a = ["A", "C"];
         let res = run_parasail(&aligner, &a, Some(&[] as &[&str])).expect("call ok");
         assert!(res.is_nan());
     }
 
-    #[test]
-    fn single_sequence_no_reference_produces_nan() {
-        let aligner = build_protein_aligner(GAP_OPEN, GAP_EXTEND).expect("aligner build");
+    #[rstest]
+    fn single_sequence_no_reference_produces_nan(#[from(protien_align_fixture)] aligner: Aligner) {
         let a = ["ACDEF"];
         let res = run_parasail(&aligner, &a, None).expect("call ok");
         assert!(res.is_nan());
     }
 
-    #[test]
-    fn reference_pairing_mean_matches_manual_sum() {
-        let aligner = build_protein_aligner(GAP_OPEN, GAP_EXTEND).expect("aligner build");
+    #[rstest]
+    fn reference_pairing_mean_matches_manual_sum(#[from(protien_align_fixture)] aligner: Aligner) {
         let a = ["ACD", "WQ"];
         let b = ["ACD", "WQ", "MN"];
 
@@ -156,9 +158,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn no_reference_pairing_mean_matches_manual_sum() {
-        let aligner = build_protein_aligner(GAP_OPEN, GAP_EXTEND).expect("aligner build");
+    #[rstest]
+    fn no_reference_pairing_mean_matches_manual_sum(
+        #[from(protien_align_fixture)] aligner: Aligner,
+    ) {
         let a = ["ACD", "WQ", "MN"];
 
         let mean = run_parasail(&aligner, &a, None).expect("call ok");

@@ -11,7 +11,7 @@ pub enum Commands {
         #[arg(required = true, num_args = 1.., help = "Input CSV file to process")]
         input_file: PathBuf,
 
-        #[arg(default_value = "-", help = "Output file path")]
+        #[arg(help = "Output file path")]
         output_file: PathBuf,
 
         #[arg(
@@ -326,10 +326,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case(GeneSchema::CtGene, true)]
-    #[case(GeneSchema::CtGene, false)]
-    #[case(GeneSchema::TrVj, true)]
-    #[case(GeneSchema::TrVj, false)]
+    #[case::ctgene_group(GeneSchema::CtGene, true)]
+    #[case::ctgene_no_group(GeneSchema::CtGene, false)]
+    #[case::trvj_group(GeneSchema::TrVj, true)]
+    #[case::trvj_no_group(GeneSchema::TrVj, false)]
     fn split_cdr3_seq_test(#[case] schema: GeneSchema, #[case] group: bool) {
         let create_df = create_df(schema, group);
         let out = split_cdr3_seq(create_df, "alpha", schema).expect("alpha split should succeed");

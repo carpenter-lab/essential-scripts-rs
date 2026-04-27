@@ -114,7 +114,10 @@ pub fn read_from_csv(input_file: PathBuf) -> LazyFrame {
 }
 
 pub fn read_from_tsv(input_file: PathBuf) -> LazyFrame {
-    match LazyCsvReader::new(PlRefPath::try_from_pathbuf(input_file).unwrap()).finish() {
+    match LazyCsvReader::new(PlRefPath::try_from_pathbuf(input_file).unwrap())
+        .with_separator(b'\t')
+        .finish()
+    {
         Ok(lf) => lf,
         Err(e) => panic!("Failed to read TSV file: {}", e),
     }
@@ -232,36 +235,27 @@ pub fn read_excel(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
     use std::path::PathBuf;
 
-    #[test]
-    fn test_get_extension_from_filename() {
-        assert_eq!(
-            get_extension_from_filename(&PathBuf::from("data.csv")),
-            Some("csv")
-        );
-        assert_eq!(
-            get_extension_from_filename(&PathBuf::from("archive.tar.gz")),
-            Some("gz")
-        );
-        assert_eq!(
-            get_extension_from_filename(&PathBuf::from("no_extension")),
-            None
-        );
-        assert_eq!(get_extension_from_filename(&PathBuf::from(".bashrc")), None);
-        assert_eq!(
-            get_extension_from_filename(&PathBuf::from("/path/to/file.txt")),
-            Some("txt")
-        );
+    #[rstest]
+    #[case("data.csv", Some("csv"))]
+    #[case("archive.tar.gz", Some("gz"))]
+    #[case("no_extension", None)]
+    #[case(".bashrc", None)]
+    #[case("/path/to/file.txt", Some("txt"))]
+    fn test_get_extension_from_filename(#[case] filename: String, #[case] ext: Option<&str>) {
+        assert_eq!(get_extension_from_filename(&PathBuf::from(filename)), ext);
     }
 
-    #[test]
-    fn test_strip_quotes() {
-        assert_eq!(strip_quotes("\"quoted\""), "quoted");
-        assert_eq!(strip_quotes("'single_quoted'"), "single_quoted");
-        assert_eq!(strip_quotes("not_quoted"), "not_quoted");
-        assert_eq!(strip_quotes("'mismatched\""), "'mismatched\"");
-        assert_eq!(strip_quotes(""), "");
-        assert_eq!(strip_quotes("''"), "");
+    #[rstest]
+    #[case("\"quoted\"", "quoted")]
+    #[case("'single_quoted'", "single_quoted")]
+    #[case("not_quoted", "not_quoted")]
+    #[case("'mismatched\"", "'mismatched\"")]
+    #[case("", "")]
+    #[case("''", "")]
+    fn test_strip_quotes(#[case] s: &str, #[case] exp: String) {
+        assert_eq!(strip_quotes(s), exp);
     }
 }
