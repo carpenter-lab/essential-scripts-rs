@@ -27,14 +27,30 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
-      - uses: taiki-e/install-action@v2
+      - name: Install Nextest
+        uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
-      - name: Build
-        run: cargo build --verbose --locked
-      - name: Run tests
-        run: cargo nextest run
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
+          tool: cargo-llvm-cov
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libparasail-dev parasail cmake clang
+      - name: Build
+        run: cargo build --locked
+      - name: Run tests
+        run: cargo llvm-cov nextest --lcov --output-path lcov.info --profile ci
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: f422086d-6daa-4023-a8a0-52138db98a50
+          files: target/nextest/ci/junit.xml
+      - name: Upload reports to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          token: f422086d-6daa-4023-a8a0-52138db98a50
+          files: lcov.info

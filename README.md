@@ -1,6 +1,7 @@
 # CLI tools to make data processing and preparation easier
 
 [![Rust](https://github.com/carpenter-lab/essential-scripts-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/carpenter-lab/essential-scripts-rs/actions/workflows/rust.yml)
+[![codecov](https://codecov.io/gh/carpenter-lab/essential-scripts-rs/graph/badge.svg?token=QAHBPDKTW5)](https://codecov.io/gh/carpenter-lab/essential-scripts-rs)
 
 ## Installation
 
