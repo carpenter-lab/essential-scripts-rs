@@ -27,6 +27,8 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
       - name: Install Nextest
         uses: taiki-e/install-action@v2
         with:
