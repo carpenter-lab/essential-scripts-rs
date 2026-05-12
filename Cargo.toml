@@ -13,10 +13,26 @@ indicatif = "0.18"
 rand = "0.10"
 parasail-rs = "0.9"
 calamine = "0.34"
+tokio = { version = "1.52", features = ["full"] }
+reqwest = { version = "0.13", features = ["json", "form", "multipart"], optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
+plotters-cairo = { version = "0.8", optional = true }
+cairo-rs = { version = "0.21", optional = true, features = ["pdf"] }
 
 [dependencies.polars]
 version = "0.53"
 features = ["lazy", "strings", "concat_str", "timezones", "dtype-array"]
+
+[dependencies.plotters]
+version = "0.3.7"
+optional = true
+default-features = false
+features = ["svg_backend", "bitmap_backend", "ttf", "bitmap_encoder"]
+
+[features]
+default = []
+enrichment = ["dep:reqwest", "dep:serde", "dep:serde_json", "dep:plotters", "dep:plotters-cairo", "dep:cairo-rs"]
 
 [profile.release]
 opt-level = 3

@@ -48,7 +48,7 @@ fn write_lazy_output(lf: LazyFrame, output_file: PathBuf, separator: u8) {
                 separator,
                 quote_char: 0,
                 null: Default::default(),
-                line_terminator: Default::default(),
+                line_terminator: PlSmallStr::from_str("\n"),
                 quote_style: Default::default(),
             }),
         };

@@ -1,11 +1,6 @@
 use clap::{Parser, Subcommand};
 
-mod aggregate;
-mod copy_cellranger_outs;
-mod io;
-mod plate_reader;
-mod split;
-mod tcr_align;
+use essential_scripts_rs::*;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -30,6 +25,9 @@ enum Commands {
 
     #[command(flatten)]
     TcrAlign(tcr_align::Commands),
+
+    #[command(flatten)]
+    RunEnrichr(enrich::Commands),
 }
 
 pub(crate) fn _main(cli: Cli) {
@@ -39,6 +37,11 @@ pub(crate) fn _main(cli: Cli) {
         Some(Commands::ReformatPlateReaderData(cmd)) => plate_reader::handle_command(cmd),
         Some(Commands::CopyCellRangerOuts(cmd)) => copy_cellranger_outs::handle_command(cmd),
         Some(Commands::TcrAlign(cmd)) => tcr_align::handle_command(cmd),
+        Some(Commands::RunEnrichr(cmd)) => {
+            if let Err(err) = enrich::handle_command(cmd) {
+                err.exit();
+            }
+        }
         None => {}
     }
 }
