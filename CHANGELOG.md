@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v0.3.0...v0.4.0) (2026-05-13)
+
+
+### Features
+
+* add Enrichr API integration for enrichment analysis and result visualization ([0bf8a15](https://github.com/carpenter-lab/essential-scripts-rs/commit/0bf8a159db9c929efdde056009e9b18e8ecb051d))
+
 ## [0.3.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v0.2.0...v0.3.0) (2026-04-23)
 
 
