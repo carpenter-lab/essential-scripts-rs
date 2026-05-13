@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v0.4.0...v0.5.0) (2026-05-13)
+
+
+### Features
+
+* enhance Enrichr API integration with improved error handling and response parsing ([2027714](https://github.com/carpenter-lab/essential-scripts-rs/commit/2027714a69f7c1ab6e58177481d35b5098cfe3e9))
+
+
+### Bug Fixes
+
+* return -1 if there is only 1 TCR alpha value in group for alignment score v background ([b32e48e](https://github.com/carpenter-lab/essential-scripts-rs/commit/b32e48e90fc187f6ac832a8975ba2a59f4bcde52))
+
 ## [0.4.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v0.3.0...v0.4.0) (2026-05-13)
 
 
