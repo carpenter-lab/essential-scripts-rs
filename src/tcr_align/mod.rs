@@ -62,8 +62,9 @@ pub(crate) fn tcr_score(input_file: PathBuf, output_file: PathBuf, replicates: u
         .collect()
         .unwrap();
 
-    let res = score_df(&df, replicates).unwrap();
-    res.write_to_csv_or_stdout(output_file);
+    score_df(&df, replicates)
+        .expect("Failed to score TCR alignments. Please check the input file format and try again.")
+        .write_to_csv_or_stdout(output_file);
 }
 
 pub fn handle_command(cmd: Commands) {

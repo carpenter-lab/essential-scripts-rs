@@ -274,13 +274,10 @@ fn calculate_scores(
                 let self_b_mean = if b.len() <= 1 {
                     f64::NAN
                 } else {
-                    match run_parasail(&aligner, &b, None) {
-                        Ok(mean) => mean,
-                        Err(e) => {
-                            eprintln!("Error running parasail for pattern {pattern}: {e}");
-                            f64::NAN
-                        }
-                    }
+                    run_parasail(&aligner, &b, None).unwrap_or_else(|e| {
+                        eprintln!("Error running parasail for pattern {pattern}: {e}");
+                        f64::NAN
+                    })
                 };
                 out_self_b.push(self_b_mean);
             }
@@ -295,13 +292,10 @@ fn calculate_scores(
                 let self_a_mean = if a.len() <= 1 {
                     f64::NAN
                 } else {
-                    match run_parasail(&aligner, &a, None) {
-                        Ok(mean) => mean,
-                        Err(e) => {
-                            eprintln!("Error running parasail for pattern {pattern}: {e}");
-                            f64::NAN
-                        }
-                    }
+                    run_parasail(&aligner, &a, None).unwrap_or_else(|e| {
+                        eprintln!("Error running parasail for pattern {pattern}: {e}");
+                        f64::NAN
+                    })
                 };
                 out_self_a.push(self_a_mean);
                 let n_val = a.len().min(all_unique_alpha.len()).min(MAX_BG_SEQS);
@@ -311,13 +305,11 @@ fn calculate_scores(
                         let background: Vec<String> =
                             all_unique_alpha.sample(rng, n_val).cloned().collect();
 
-                        let bg_mean = match run_parasail(&aligner, &a, Some(&background)) {
-                            Ok(mean) => mean,
-                            Err(e) => {
+                        let bg_mean =
+                            run_parasail(&aligner, &a, Some(&background)).unwrap_or_else(|e| {
                                 eprintln!("Error running parasail for pattern {pattern}: {e}");
                                 f64::NAN
-                            }
-                        };
+                            });
                         // we want lower scores to be better
                         if self_a_mean < bg_mean {
                             greater_count += 1;
@@ -327,7 +319,12 @@ fn calculate_scores(
                 } else {
                     greater_count = n_replicates;
                 }
-                out_frac.push((greater_count as f64) / (n_replicates as f64));
+                let final_value = if self_a_mean.is_nan() {
+                    -1.
+                } else {
+                    (greater_count as f64) / (n_replicates as f64)
+                };
+                out_frac.push(final_value);
             }
         }
 
