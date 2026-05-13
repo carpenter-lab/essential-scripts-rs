@@ -6,10 +6,11 @@ use plotters::prelude::*;
 use plotters_cairo::CairoBackend;
 use polars::polars_utils::itertools::Itertools;
 use polars::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EnrichrResult {
     rank: Vec<i32>,
     term: Vec<String>,
@@ -22,6 +23,7 @@ pub struct EnrichrResult {
 }
 
 impl EnrichrResult {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         rank: Vec<i32>,
         term: Vec<String>,
@@ -44,19 +46,19 @@ impl EnrichrResult {
         }
     }
 
-    pub fn empty(library: &String) -> Self {
+    pub fn empty(library: &str) -> Self {
         Self::new(
             vec![0],
             vec![String::new()],
             vec![1.0],
             vec![0.0],
-            library.clone(),
+            library.to_owned(),
             vec![String::new()],
             vec![1.0],
             vec![0.0],
         )
     }
-    pub fn new_from_json(json: &Value, library: &String) -> Self {
+    pub fn new_from_json(json: &Value, library: &str) -> Self {
         let mut ranks: Vec<i32> = Vec::new();
         let mut terms: Vec<String> = Vec::new();
         let mut p_values: Vec<f64> = Vec::new();
@@ -67,22 +69,22 @@ impl EnrichrResult {
 
         if let Some(array) = json.as_array() {
             for item in array {
-                if let Some(row) = item.as_array() {
-                    if row.len() >= 7 {
-                        ranks.push(row[0].as_i64().unwrap_or(0) as i32);
-                        terms.push(row[1].as_str().unwrap_or_default().to_string());
-                        p_values.push(row[2].as_f64().unwrap_or(1.0));
-                        zscores.push(row[3].as_f64().unwrap_or(0.0));
-                        combined_scores.push(row[4].as_f64().unwrap_or(0.0));
+                if let Some(row) = item.as_array()
+                    && row.len() >= 7
+                {
+                    ranks.push(row[0].as_i64().unwrap_or(0) as i32);
+                    terms.push(row[1].as_str().unwrap_or_default().to_string());
+                    p_values.push(row[2].as_f64().unwrap_or(1.0));
+                    zscores.push(row[3].as_f64().unwrap_or(0.0));
+                    combined_scores.push(row[4].as_f64().unwrap_or(0.0));
 
-                        let genes_str = row[5]
-                            .as_array()
-                            .map(|a| a.iter().filter_map(|v| v.as_str()).collect_vec().join(", "))
-                            .unwrap_or_default();
-                        overlap_genes_str.push(genes_str);
+                    let genes_str = row[5]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|v| v.as_str()).collect_vec().join(", "))
+                        .unwrap_or_default();
+                    overlap_genes_str.push(genes_str);
 
-                        q_values.push(row[6].as_f64().unwrap_or(1.0));
-                    }
+                    q_values.push(row[6].as_f64().unwrap_or(1.0));
                 }
             }
         }
@@ -92,7 +94,7 @@ impl EnrichrResult {
             terms,
             p_values,
             zscores,
-            library.clone(),
+            library.to_owned(),
             overlap_genes_str,
             q_values,
             combined_scores,
@@ -112,6 +114,27 @@ impl EnrichrResult {
         )
     }
 
+    pub fn get_all_rows_as_values(&self) -> Vec<Vec<Value>> {
+        // Convert the internal fields back into row arrays for storage
+        (0..self.rank.len())
+            .map(|i| {
+                vec![
+                    Value::from(self.rank[i]),
+                    Value::from(self.term[i].clone()),
+                    Value::from(self.p_value[i]),
+                    Value::from(self.zscore[i]),
+                    Value::from(self.combined_score[i]),
+                    Value::from(
+                        self.overlap_genes[i]
+                            .split(", ")
+                            .map(|s| Value::from(s.to_string()))
+                            .collect::<Vec<_>>(),
+                    ),
+                    Value::from(self.q_value[i]),
+                ]
+            })
+            .collect()
+    }
     pub fn get_top_n(&self, n: usize) -> Self {
         let EnrichrResult {
             rank,
@@ -188,14 +211,19 @@ impl Enrichment {
                 }
             }
             None => {
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(Box::new(std::io::Error::other(
                     "API not initialized. Call build() before run().",
                 )));
             }
         }
 
         Ok(self)
+    }
+    pub fn get_short_id(&self) -> Option<String> {
+        match self.api {
+            None => None,
+            Some(ref api) => api.get_short_id(),
+        }
     }
 
     pub fn save_results(&self, path_buf: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
@@ -204,14 +232,8 @@ impl Enrichment {
             .iter()
             .map(|result| result.to_dataframe().unwrap().lazy())
             .collect();
-        println!(
-            "{:?}",
-            df.clone()
-                .iter()
-                .map(|lf| lf.clone().collect().unwrap())
-                .collect::<Vec<_>>()
-        );
         let combined_df = concat(df, UnionArgs::default())?;
+        println!("{}", combined_df.clone().collect()?);
         tokio::task::block_in_place(|| {
             combined_df.write_to_tsv_or_stdout(path_buf);
         });
@@ -228,23 +250,24 @@ impl Enrichment {
             "red" => RGBColor(255, 0, 0),
             _ => {
                 // Accept hex like "#RRGGBB"
-                if let Some(hex) = s.strip_prefix('#') {
-                    if hex.len() == 6 {
-                        if let Ok(rgb) = u32::from_str_radix(hex, 16) {
-                            let r = ((rgb >> 16) & 0xFF) as u8;
-                            let g = ((rgb >> 8) & 0xFF) as u8;
-                            let b = (rgb & 0xFF) as u8;
-                            return RGBColor(r, g, b);
-                        }
-                    }
+                if let Some(hex) = s.strip_prefix('#')
+                    && hex.len() == 6
+                    && let Ok(rgb) = u32::from_str_radix(hex, 16)
+                {
+                    let r = ((rgb >> 16) & 0xFF) as u8;
+                    let g = ((rgb >> 8) & 0xFF) as u8;
+                    let b = (rgb & 0xFF) as u8;
+                    return RGBColor(r, g, b);
                 }
                 // default
                 RGBColor(135, 206, 250)
             }
         }
     }
+
+    #[allow(clippy::too_many_arguments)]
     fn render_bar_chart<DB: DrawingBackend>(
-        root: DrawingArea<DB, Shift>,
+        root: &DrawingArea<DB, Shift>,
         library: &str,
         terms: &[String],
         p_vals: &[f64],
@@ -259,7 +282,7 @@ impl Enrichment {
     {
         root.fill(&WHITE)?;
 
-        let mut chart = ChartBuilder::on(&root)
+        let mut chart = ChartBuilder::on(root)
             .caption(library.replace('_', " "), ("sans-serif", 24))
             .margin(10)
             .x_label_area_size(50)
@@ -312,9 +335,9 @@ impl Enrichment {
             return Err("No rows to plot".into());
         }
 
-        let max_x = neg_log_p.iter().cloned().fold(0.0_f64, f64::max).max(1.0);
+        let max_x = neg_log_p.iter().copied().fold(0.0_f64, f64::max).max(1.0);
         let width = 1000u32;
-        let height = 70u32 * (n as u32).max(5);
+        let height = 70u32 * u32::try_from(n)?.max(5);
 
         let ext = path
             .extension()
@@ -326,7 +349,7 @@ impl Enrichment {
             "svg" => {
                 let root = SVGBackend::new(path, (width, height)).into_drawing_area();
                 Self::render_bar_chart(
-                    root,
+                    &root,
                     library,
                     &terms,
                     &p_vals,
@@ -338,12 +361,12 @@ impl Enrichment {
                 )
             }
             "pdf" => {
-                let surface = cairo::PdfSurface::new(width as f64, height as f64, path)?;
+                let surface = cairo::PdfSurface::new(f64::from(width), f64::from(height), path)?;
                 let context = cairo::Context::new(&surface)?;
                 let root = CairoBackend::new(&context, (width, height))?.into_drawing_area();
 
                 Self::render_bar_chart(
-                    root,
+                    &root,
                     library,
                     &terms,
                     &p_vals,
@@ -360,10 +383,10 @@ impl Enrichment {
             "png" | "jpg" | "jpeg" => {
                 let path_str = path
                     .to_str()
-                    .ok_or_else(|| format!("Invalid path: {:?}", path))?;
+                    .ok_or_else(|| format!("Invalid path: {}", path.display()))?;
                 let root = BitMapBackend::new(path_str, (width, height)).into_drawing_area();
                 Self::render_bar_chart(
-                    root,
+                    &root,
                     library,
                     &terms,
                     &p_vals,
@@ -374,7 +397,7 @@ impl Enrichment {
                     color_secondary,
                 )
             }
-            other => Err(format!("Unsupported output extension: {}", other).into()),
+            other => Err(format!("Unsupported output extension: {other}").into()),
         }
     }
 
@@ -394,10 +417,9 @@ impl Enrichment {
             .iter()
             .find(|r| r.library == lib)
             .ok_or_else(|| {
-                Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("No results found for library: {}", lib),
-                )) as Box<dyn std::error::Error>
+                Box::new(std::io::Error::other(format!(
+                    "No results found for library: {lib}"
+                ))) as Box<dyn std::error::Error>
             })?;
 
         // Clone for blocking thread
@@ -411,7 +433,7 @@ impl Enrichment {
         // spawn_blocking returns JoinHandle<Result<(), Box<dyn Error + Send + Sync>>>
         let join_result = tokio::task::spawn_blocking(move || {
             // closure runs on blocking thread
-            for path in paths_clone.iter() {
+            for path in &paths_clone {
                 Enrichment::draw_bar_plot_file(
                     &result_clone,
                     &lib_clone,
@@ -429,7 +451,7 @@ impl Enrichment {
         let inner_res: Result<(), Box<dyn std::error::Error + Send + Sync>> = match join_result {
             Ok(res) => res,
             Err(join_err) => {
-                return Err(Box::from(format!("JoinError: {}", join_err)));
+                return Err(Box::from(format!("JoinError: {join_err}")));
             }
         };
 

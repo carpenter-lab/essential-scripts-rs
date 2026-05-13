@@ -3,17 +3,47 @@ mod api;
 #[cfg(feature = "enrichment")]
 mod core;
 
-use clap::Subcommand;
+use clap::{Error, Subcommand, ValueEnum};
+use std::fmt;
 #[cfg(feature = "enrichment")]
 use std::fs;
 use std::path::PathBuf;
+
+#[derive(Clone, ValueEnum, Debug)]
+pub enum Library {
+    ReactomePathways2024,
+    Reactome,
+    BioCarta2016,
+    WikiPathways2024Human,
+    GOBiologicalProcess,
+}
+
+impl fmt::Display for Library {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let s = match self {
+            Library::ReactomePathways2024 => String::from("Reactome_Pathways_2024"),
+            Library::Reactome => Library::ReactomePathways2024.to_string(),
+            Library::BioCarta2016 => String::from("BioCarta_2016"),
+            Library::WikiPathways2024Human => String::from("WikiPathways_2024_Human"),
+            Library::GOBiologicalProcess => String::from("GO_Biological_Process_2026"),
+        };
+        write!(f, "{s}")
+    }
+}
+
+fn must_be_none(pb: Option<&PathBuf>) -> Result<Option<PathBuf>, String> {
+    match pb {
+        None => Ok(None),
+        Some(_) => Err("Background is not supported in the API".to_string()),
+    }
+}
 
 #[derive(Subcommand)]
 pub enum Commands {
     #[command(about = "Run Enrichr via API interface.")]
     RunEnrichr {
         #[arg(short, long, help = "Enrichr Library to use")]
-        library: String,
+        library: Library,
 
         #[arg(
             short,
@@ -53,8 +83,8 @@ async fn enrich_command(
     let libraries = vec![library.clone()];
     let mut enrich = core::Enrichment::new(genes, libraries);
 
-    if let Some(path) = background {
-        let bg_genes: Vec<String> = fs::read_to_string(&path)
+    if let Some(path) = &background {
+        let bg_genes: Vec<String> = fs::read_to_string(path)
             .map(|line| line.trim().to_string())
             .into_iter()
             .collect();
@@ -62,6 +92,14 @@ async fn enrich_command(
     }
     enrich.build();
     enrich.run().await?;
+
+    if let Some(short_id) = enrich.get_short_id()
+        && background.is_none()
+    {
+        println!(
+            "Results can be found at: https://maayanlab.cloud/Enrichr/enrich?dataset={short_id}"
+        );
+    }
     enrich.save_results(output_file)?;
     enrich
         .bar_plot(output_plot, Some(library), None, None)
@@ -70,7 +108,7 @@ async fn enrich_command(
 }
 
 #[tokio::main]
-pub async fn handle_command(cmd: Commands) -> Result<(), clap::Error> {
+pub async fn handle_command(cmd: Commands) -> Result<(), Error> {
     #[cfg(feature = "enrichment")]
     {
         match cmd {
@@ -81,12 +119,22 @@ pub async fn handle_command(cmd: Commands) -> Result<(), clap::Error> {
                 output_file,
                 output_plot,
             } => {
-                match enrich_command(library, gene_list, background, output_file, output_plot).await
+                if let Err(e) = must_be_none(background.as_ref()) {
+                    return Err(Error::raw(clap::error::ErrorKind::ValueValidation, e));
+                }
+                match enrich_command(
+                    library.to_string(),
+                    gene_list,
+                    background,
+                    output_file,
+                    output_plot,
+                )
+                .await
                 {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(clap::Error::raw(
+                    Ok(()) => Ok(()),
+                    Err(e) => Err(Error::raw(
                         clap::error::ErrorKind::Io,
-                        format!("Enrichment analysis failed: {}", e),
+                        format!("Enrichment analysis failed: {e}"),
                     )),
                 }
             }
@@ -96,7 +144,7 @@ pub async fn handle_command(cmd: Commands) -> Result<(), clap::Error> {
     #[cfg(not(feature = "enrichment"))]
     {
         match cmd {
-            Commands::RunEnrichr { .. } => Err(clap::Error::raw(
+            Commands::RunEnrichr { .. } => Err(Error::raw(
                 clap::error::ErrorKind::MissingSubcommand,
                 "This command requires the `enrichment` feature. Rebuild with `cargo run --features enrichment -- ...`",
             )),
