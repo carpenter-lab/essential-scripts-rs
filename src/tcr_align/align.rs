@@ -43,32 +43,29 @@ pub fn run_parasail<S: AsRef<str>>(
     let mut sum: i64 = 0;
     let mut n: i64 = 0;
 
-    match reference {
-        Some(b) => {
-            for query_seq in a.iter() {
-                let q_bytes = query_seq.as_ref().as_bytes();
-                for ref_seq in b.iter() {
-                    let r_bytes = ref_seq.as_ref().as_bytes();
-                    let result = aligner.align(Some(q_bytes), r_bytes).map_err(|e| {
-                        PolarsError::ComputeError(format!("parasail align failed: {e}").into())
-                    })?;
-                    sum += result.get_score() as i64;
-                    n += 1;
-                }
+    if let Some(b) = reference {
+        for query_seq in a {
+            let q_bytes = query_seq.as_ref().as_bytes();
+            for ref_seq in b {
+                let r_bytes = ref_seq.as_ref().as_bytes();
+                let result = aligner.align(Some(q_bytes), r_bytes).map_err(|e| {
+                    PolarsError::ComputeError(format!("parasail align failed: {e}").into())
+                })?;
+                sum += i64::from(result.get_score());
+                n += 1;
             }
         }
-        None => {
-            let n_a = a.len();
-            for i in 0..n_a {
-                let q_bytes = a[i].as_ref().as_bytes();
-                for j in (i + 1)..n_a {
-                    let r_bytes = a[j].as_ref().as_bytes();
-                    let result = aligner.align(Some(q_bytes), r_bytes).map_err(|e| {
-                        PolarsError::ComputeError(format!("parasail align failed: {e}").into())
-                    })?;
-                    sum += result.get_score() as i64;
-                    n += 1;
-                }
+    } else {
+        let n_a = a.len();
+        for i in 0..n_a {
+            let q_bytes = a[i].as_ref().as_bytes();
+            for item in a.iter().take(n_a).skip(i + 1) {
+                let r_bytes = item.as_ref().as_bytes();
+                let result = aligner.align(Some(q_bytes), r_bytes).map_err(|e| {
+                    PolarsError::ComputeError(format!("parasail align failed: {e}").into())
+                })?;
+                sum += i64::from(result.get_score());
+                n += 1;
             }
         }
     }

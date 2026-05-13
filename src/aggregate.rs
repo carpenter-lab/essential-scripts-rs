@@ -96,16 +96,8 @@ fn process_input_lazy(df: LazyFrame, keep_alpha: bool) -> LazyFrame {
         .group_by([col("sample"), col("^.*_TRA$"), col("^.*_TRB$")])
         .agg([len().alias("count")])
         .with_column(col("sample").str().replace_all(lit("-"), lit(":"), false));
-    let result = match keep_alpha {
-        false => df2.select([
-            col("sample"),
-            col("cdr3_TRB").alias("CDR3b"),
-            col("v_gene_TRB").alias("TRBV"),
-            col("j_gene_TRB").alias("TRBJ"),
-            col("cdr3_TRA").alias("CDR3a"),
-            col("count"),
-        ]),
-        true => df2.select([
+    if keep_alpha {
+        df2.select([
             col("sample"),
             col("cdr3_TRB").alias("CDR3b"),
             col("v_gene_TRB").alias("TRBV"),
@@ -114,16 +106,24 @@ fn process_input_lazy(df: LazyFrame, keep_alpha: bool) -> LazyFrame {
             col("v_gene_TRA").alias("TRAV"),
             col("j_gene_TRA").alias("TRAJ"),
             col("count"),
-        ]),
-    };
-    result
+        ])
+    } else {
+        df2.select([
+            col("sample"),
+            col("cdr3_TRB").alias("CDR3b"),
+            col("v_gene_TRB").alias("TRBV"),
+            col("j_gene_TRB").alias("TRBJ"),
+            col("cdr3_TRA").alias("CDR3a"),
+            col("count"),
+        ])
+    }
 }
 
 pub(crate) fn aggregate_cellranger_tcr_output(
     input_files: Vec<PathBuf>,
     output_file: PathBuf,
     keep_alpha: bool,
-) -> () {
+) {
     let concat_args = UnionArgs {
         parallel: true,
         rechunk: true,
@@ -149,10 +149,10 @@ pub(crate) fn aggregate_cellranger_tcr_output(
         .filter(col("CDR3b").is_not_null())
         .filter(col("CDR3b").neq(lit("")));
 
-    processed.write_to_csv_or_stdout(output_file)
+    processed.write_to_csv_or_stdout(output_file);
 }
 
-pub fn handle_command(cmd: Commands) -> () {
+pub fn handle_command(cmd: Commands) {
     match cmd {
         Commands::AggregateCellRangerTCR {
             input_files,

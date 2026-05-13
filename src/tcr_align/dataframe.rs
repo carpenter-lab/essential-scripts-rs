@@ -38,9 +38,9 @@ pub(crate) fn all_unique_cdr3_alpha(all_data: &DataFrame) -> PolarsResult<Vec<St
     // Skip nulls and empty/whitespace-only strings produced by splitting
     Ok(s.into_iter()
         .flatten()
-        .map(|s| s.trim())
+        .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+        .map(ToString::to_string)
         .collect())
 }
 
@@ -144,7 +144,7 @@ pub(crate) fn fraction_self_greater(
         .expect("could not get 'pattern' column")
         .str()?
         .into_no_null_iter()
-        .map(|s| s.to_string())
+        .map(ToString::to_string)
         .collect();
 
     let mut out_pattern: Vec<String> = Vec::with_capacity(*height);
@@ -158,10 +158,10 @@ pub(crate) fn fraction_self_greater(
         groups,
         all_unique_alpha,
         n_replicates,
-        &gap_open,
-        &gap_extend,
+        gap_open,
+        gap_extend,
         *height,
-        patterns,
+        &patterns,
         &mut out_pattern,
         &mut out_self_a,
         &mut out_self_b,
@@ -197,14 +197,16 @@ fn downsample_vec(
     out
 }
 
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
 fn calculate_scores(
     groups: &DataFrame,
     all_unique_alpha: &[String],
     n_replicates: usize,
-    gap_open: &i32,
-    gap_extend: &i32,
+    gap_open: i32,
+    gap_extend: i32,
     height: usize,
-    patterns: Vec<String>,
+    patterns: &[String],
     out_pattern: &mut Vec<String>,
     out_self_a: &mut Vec<f64>,
     out_self_b: &mut Vec<f64>,
@@ -220,31 +222,28 @@ fn calculate_scores(
     let pb: indicatif::ProgressBar;
     let inner_pb: indicatif::ProgressBar;
 
-    match progress_style {
-        Ok(progress_style) => {
-            mpb = indicatif::MultiProgress::new();
-            pb = mpb.add(indicatif::ProgressBar::new(height as u64));
-            pb.set_style(progress_style);
-            match inner_progress_style {
-                Ok(inner_progress_style) => {
-                    inner_pb = mpb.add(indicatif::ProgressBar::new(n_replicates as u64));
-                    inner_pb.set_style(inner_progress_style);
-                }
-                Err(_) => {
-                    inner_pb = indicatif::ProgressBar::hidden();
-                }
+    if let Ok(progress_style) = progress_style {
+        mpb = indicatif::MultiProgress::new();
+        pb = mpb.add(indicatif::ProgressBar::new(height as u64));
+        pb.set_style(progress_style);
+        match inner_progress_style {
+            Ok(inner_progress_style) => {
+                inner_pb = mpb.add(indicatif::ProgressBar::new(n_replicates as u64));
+                inner_pb.set_style(inner_progress_style);
+            }
+            Err(_) => {
+                inner_pb = indicatif::ProgressBar::hidden();
             }
         }
-        Err(_) => {
-            pb = indicatif::ProgressBar::hidden();
-            inner_pb = indicatif::ProgressBar::hidden();
-        }
+    } else {
+        pb = indicatif::ProgressBar::hidden();
+        inner_pb = indicatif::ProgressBar::hidden();
     }
 
-    let aligner = match build_protein_aligner(*gap_open, *gap_extend) {
+    let aligner = match build_protein_aligner(gap_open, gap_extend) {
         Ok(aligner) => aligner,
         Err(e) => {
-            eprintln!("Error building protein aligner: {}", e);
+            eprintln!("Error building protein aligner: {e}");
             return;
         }
     };
@@ -266,7 +265,7 @@ fn calculate_scores(
             width = 10
         ));
 
-        match get_list_cell_as_vec_utf8(&groups, "TcRb", i) {
+        match get_list_cell_as_vec_utf8(groups, "TcRb", i) {
             Err(_) => {
                 out_self_b.push(f64::NAN);
             }
@@ -278,7 +277,7 @@ fn calculate_scores(
                     match run_parasail(&aligner, &b, None) {
                         Ok(mean) => mean,
                         Err(e) => {
-                            eprintln!("Error running parasail for pattern {}: {}", pattern, e);
+                            eprintln!("Error running parasail for pattern {pattern}: {e}");
                             f64::NAN
                         }
                     }
@@ -287,7 +286,7 @@ fn calculate_scores(
             }
         }
 
-        match get_list_cell_as_vec_utf8(&groups, "TcRa", i) {
+        match get_list_cell_as_vec_utf8(groups, "TcRa", i) {
             Err(_) => {
                 out_self_a.push(f64::NAN);
             }
@@ -299,7 +298,7 @@ fn calculate_scores(
                     match run_parasail(&aligner, &a, None) {
                         Ok(mean) => mean,
                         Err(e) => {
-                            eprintln!("Error running parasail for pattern {}: {}", pattern, e);
+                            eprintln!("Error running parasail for pattern {pattern}: {e}");
                             f64::NAN
                         }
                     }
@@ -315,7 +314,7 @@ fn calculate_scores(
                         let bg_mean = match run_parasail(&aligner, &a, Some(&background)) {
                             Ok(mean) => mean,
                             Err(e) => {
-                                eprintln!("Error running parasail for pattern {}: {}", pattern, e);
+                                eprintln!("Error running parasail for pattern {pattern}: {e}");
                                 f64::NAN
                             }
                         };

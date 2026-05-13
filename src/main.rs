@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 
-use essential_scripts_rs::*;
+use essential_scripts_rs::{
+    aggregate, copy_cellranger_outs, enrich, plate_reader, split, tcr_align,
+};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -30,7 +32,7 @@ enum Commands {
     RunEnrichr(enrich::Commands),
 }
 
-pub(crate) fn _main(cli: Cli) {
+pub(crate) fn main_helper(cli: Cli) {
     match cli.command {
         Some(Commands::Aggregate(cmd)) => aggregate::handle_command(cmd),
         Some(Commands::Split(cmd)) => split::handle_command(cmd),
@@ -47,7 +49,7 @@ pub(crate) fn _main(cli: Cli) {
 }
 
 fn main() {
-    _main(Cli::parse());
+    main_helper(Cli::parse());
 }
 
 #[cfg(test)]

@@ -83,7 +83,9 @@ pub fn handle_command(cmd: Commands) {
             pipestance_results: PipestanceResults { h5, mex, vdj },
             check,
         } => {
-            if let Err(e) = copy_cellranger_outs_main(&base_path, &dest, h5, mex, vdj, check) {
+            if let Err(e) =
+                copy_cellranger_outs_main(&base_path, Option::from(&dest), h5, mex, vdj, check)
+            {
                 eprintln!("{e}");
             }
         }
@@ -92,7 +94,7 @@ pub fn handle_command(cmd: Commands) {
 
 fn copy_cellranger_outs_main(
     base_path: &Path,
-    dest: &Option<PathBuf>,
+    dest: Option<&PathBuf>,
     h5: bool,
     mex: bool,
     vdj: bool,
@@ -112,14 +114,11 @@ fn copy_cellranger_outs_main(
         ));
     }
 
-    let dest = match dest {
-        None => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Missing destination path",
-            ));
-        }
-        Some(dest) => dest,
+    let Some(dest) = dest else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Missing destination path",
+        ));
     };
 
     // Ensure destination exists
@@ -170,15 +169,15 @@ fn has_mri_tgz(pipestance_dir: &Path) -> io::Result<bool> {
     for entry in fs::read_dir(pipestance_dir)? {
         let entry = entry?;
         let p = entry.path();
-        if p.is_file() {
-            if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
-                if name.ends_with(".mri.tgz") {
-                    ok = true;
-                    break;
-                }
-            }
+        if p.is_file()
+            && let Some(name) = p.file_name().and_then(|s| s.to_str())
+            && name.ends_with(".mri.tgz")
+        {
+            ok = true;
+            break;
         }
     }
+
     Ok(ok)
 }
 
@@ -261,7 +260,7 @@ fn copy_outputs_for_pipestance(
         if h5 {
             let src = sample_dir.join(PATH_TO_COUNT_H5);
             if src.is_file() {
-                let dst = dest.join(format!("{}.h5", sample_name));
+                let dst = dest.join(format!("{sample_name}.h5"));
                 copy_file_counting(&src, &dst, &mut stats.h5_copied);
             }
         }
@@ -309,7 +308,7 @@ fn copy_outputs_for_pipestance(
         if vdj {
             let src = sample_dir.join(PATH_TO_VDJ_ANN);
             if src.is_file() {
-                let dst = dest.join(format!("{}.csv", sample_name));
+                let dst = dest.join(format!("{sample_name}.csv"));
                 copy_file_counting(&src, &dst, &mut stats.vdj_copied);
             }
         }
@@ -319,7 +318,7 @@ fn copy_outputs_for_pipestance(
 
 fn cleanup_mex_dir_if_new(stats: &mut CopyStats, dst_dir: &PathBuf, dst_dir_newly_created: bool) {
     if dst_dir_newly_created {
-        if let Err(e) = fs::remove_dir(&dst_dir) {
+        if let Err(e) = fs::remove_dir(dst_dir) {
             eprintln!("Failed to remove {}: {}", dst_dir.display(), e);
         } else {
             stats.mex_dirs_cleaned_up += 1;
@@ -345,7 +344,7 @@ mod tests {
         fs::write(sample.join("sample_filtered_feature_bc_matrix.h5"), b"abc").unwrap();
 
         let stats =
-            copy_cellranger_outs_main(&base, &Some(dest.clone()), true, false, false, false)
+            copy_cellranger_outs_main(&base, Some(&dest.clone()), true, false, false, false)
                 .unwrap();
 
         let out = dest.join("S1.h5");
@@ -375,7 +374,7 @@ mod tests {
         fs::write(nested.join("ignored.txt"), b"ignore me").unwrap();
 
         let stats =
-            copy_cellranger_outs_main(&base, &Some(dest.clone()), false, true, false, false)
+            copy_cellranger_outs_main(&base, Some(&dest.clone()), false, true, false, false)
                 .unwrap();
         let dst_dir = dest.join("S1");
         assert!(dst_dir.is_dir());
@@ -403,7 +402,7 @@ mod tests {
         fs::create_dir_all(&sample_root).unwrap();
 
         let stats =
-            copy_cellranger_outs_main(&base, &Some(dest.clone()), false, true, false, false)
+            copy_cellranger_outs_main(&base, Some(&dest.clone()), false, true, false, false)
                 .unwrap();
 
         // Destination S1 dir should have been created then cleaned up
@@ -428,7 +427,7 @@ mod tests {
         fs::write(vdj_dir.join("filtered_contig_annotations.csv"), b"contigs").unwrap();
 
         let stats =
-            copy_cellranger_outs_main(&base, &Some(dest.clone()), false, false, true, false)
+            copy_cellranger_outs_main(&base, Some(&dest.clone()), false, false, true, false)
                 .unwrap();
 
         let out = dest.join("S1.csv");
@@ -454,7 +453,7 @@ mod tests {
         fs::write(preexisting.join("keep.txt"), b"keep").unwrap();
 
         let stats =
-            copy_cellranger_outs_main(&base, &Some(dest), false, true, false, false).unwrap();
+            copy_cellranger_outs_main(&base, Some(&dest), false, true, false, false).unwrap();
 
         assert!(preexisting.is_dir());
         assert!(preexisting.join("keep.txt").is_file());

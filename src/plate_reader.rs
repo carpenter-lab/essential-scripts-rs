@@ -3,7 +3,7 @@ use crate::io::WriteToCsvOrStdout;
 use calamine::{Reader, Xlsx, open_workbook};
 use clap::Subcommand;
 use polars::prelude::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Subcommand)]
 #[command(about = "Reformat plate reader data into useful format")]
@@ -39,7 +39,7 @@ fn flatten_by_stride(
     // Helper to extract a single row's values across all columns
     let get_row = |row_idx: usize| -> PolarsResult<Vec<AnyValue<'_>>> {
         let mut row_values = Vec::with_capacity(ncols);
-        for col in columns.iter() {
+        for col in columns {
             row_values.push(col.get(row_idx)?);
         }
         Ok(row_values)
@@ -74,7 +74,7 @@ fn flatten_by_stride(
 
 fn generate_well_ids(rows: &[char], cols: &[u32]) -> Vec<String> {
     rows.iter()
-        .flat_map(|r| cols.iter().map(move |c| format!("{}{}", r, c)))
+        .flat_map(|r| cols.iter().map(move |c| format!("{r}{c}")))
         .collect()
 }
 
@@ -85,7 +85,7 @@ fn generate_default_well_ids() -> Vec<String> {
 }
 
 /// Drop rows that have fewer than `threshold` non-null values
-fn drop_mostly_empty_rows(df: DataFrame, threshold: usize) -> PolarsResult<DataFrame> {
+fn drop_mostly_empty_rows(df: &DataFrame, threshold: usize) -> PolarsResult<DataFrame> {
     let height = df.height();
     let mut keep_rows = Vec::with_capacity(height);
 
@@ -101,7 +101,11 @@ fn drop_mostly_empty_rows(df: DataFrame, threshold: usize) -> PolarsResult<DataF
         }
 
         if non_null_count >= threshold {
-            keep_rows.push(row_idx as u32);
+            keep_rows.push(u32::try_from(row_idx).map_err(|e| {
+                PolarsError::ComputeError(
+                    format!("Row index {row_idx} exceeds u32 max: {e}").into(),
+                )
+            })?);
         }
     }
 
@@ -122,7 +126,7 @@ fn clean_concentration(col: &Column) -> PolarsResult<Series> {
     let len = str_chunked.len();
     let mut result = Vec::with_capacity(len);
 
-    for opt_str in str_chunked.into_iter() {
+    for opt_str in str_chunked {
         match opt_str {
             None => result.push(None),
             Some(s) => {
@@ -180,7 +184,7 @@ fn extract_numeric(s: &str) -> Option<f64> {
 }
 
 fn prepare_data(
-    df: DataFrame,
+    df: &DataFrame,
     value_col_start: usize,
     value_col_end: Option<usize>,
     setup_stride: usize,
@@ -197,7 +201,7 @@ fn prepare_data(
         .iter()
         .map(|s| io::strip_quotes(s.as_str()))
         .collect::<Vec<String>>();
-    let col_names: Vec<&str> = col_names.iter().map(|s| s.as_str()).collect();
+    let col_names: Vec<&str> = col_names.iter().map(String::as_str).collect();
     // Build setup slice by extracting columns and slicing rows
     let mut setup_cols = Vec::new();
     for &col_name in &col_names {
@@ -273,7 +277,7 @@ fn prepare_data(
     let result_df = DataFrame::new_infer_height(series_vec)?;
 
     // Drop rows with fewer than 2 non-null values (equivalent to dropna(thresh=2))
-    let result_df = drop_mostly_empty_rows(result_df, 2)?;
+    let result_df = drop_mostly_empty_rows(&result_df, 2)?;
     Ok((result_df, setup_names, data_names))
 }
 
@@ -288,7 +292,7 @@ fn run(
     let df = io::read_excel(input_path, sheet_name, skiprows, Some(false))?;
 
     // Prepare data with default strides (2 for setup, 3 for data)
-    let (mut res, setup_names, data_names) = prepare_data(df, 2, None, 2, 3)?;
+    let (mut res, setup_names, data_names) = prepare_data(&df, 2, None, 2, 3)?;
 
     // Build adjusted/clean concentration columns if source exists
     let col_names = res.get_column_names();
@@ -309,76 +313,73 @@ fn run(
     let mut column_order = vec!["well_id".to_string()];
     column_order.extend(setup_names.clone());
     column_order.extend(data_names.clone());
-    match has_concentration {
-        Some(conc_col_use) => {
-            let adjusted_col_name = format!("{} Adjusted", concentration_column);
-            let clean_col_name = format!("{} Clean", concentration_column);
+    if let Some(conc_col_use) = has_concentration {
+        let adjusted_col_name = format!("{concentration_column} Adjusted");
+        let clean_col_name = format!("{concentration_column} Clean");
 
-            // Create adjusted column
-            let concentration_series = res.column(&conc_col_use)?;
+        // Create adjusted column
+        let concentration_series = res.column(&conc_col_use)?;
 
-            let adjusted_series = clean_concentration(concentration_series)?;
+        let adjusted_series = clean_concentration(concentration_series)?;
 
-            res = res
-                .with_column(
-                    adjusted_series
-                        .with_name(PlSmallStr::from_str(&adjusted_col_name))
-                        .into_column(),
-                )?
-                .to_owned();
+        res = res
+            .with_column(
+                adjusted_series
+                    .with_name(PlSmallStr::from_str(&adjusted_col_name))
+                    .into_column(),
+            )?
+            .to_owned();
 
-            // Determine which column provides the threshold
-            let col_for_threshold = threshold_source.or_else(|| {
-                if !data_names.is_empty() {
-                    Some(data_names[0].as_str())
-                } else {
-                    None
-                }
-            });
-
-            // Create clean column
-            let clean_series = if let (Some(threshold_col), Some(threshold_val)) =
-                (col_for_threshold, threshold_value)
-            {
-                if res
-                    .get_column_names()
-                    .contains(&&PlSmallStr::from_str(&threshold_col))
-                {
-                    // Mask adjusted values where threshold column > threshold_value
-                    let threshold_series = res.column(threshold_col)?;
-                    let adjusted_col = res.column(&adjusted_col_name)?;
-
-                    // Create mask: true where threshold > threshold_value
-                    let mask = threshold_series.gt(&Column::new(
-                        PlSmallStr::from_str("threshold"),
-                        Series::new("threshold".into(), [threshold_val]),
-                    ))?;
-
-                    // Apply mask: set to null where mask is true
-                    let clean = adjusted_col.zip_with(
-                        &mask,
-                        &Series::new_null("null".into(), adjusted_col.len()).into_column(),
-                    )?;
-                    clean.with_name(PlSmallStr::from_str(&clean_col_name))
-                } else {
-                    // Threshold column not found, use adjusted as clean
-                    res.column(&adjusted_col_name)?
-                        .clone()
-                        .with_name(PlSmallStr::from_str(&clean_col_name))
-                }
+        // Determine which column provides the threshold
+        let col_for_threshold = threshold_source.or_else(|| {
+            if data_names.is_empty() {
+                None
             } else {
-                // No threshold, use adjusted as clean
+                Some(data_names[0].as_str())
+            }
+        });
+
+        // Create clean column
+        let clean_series = if let (Some(threshold_col), Some(threshold_val)) =
+            (col_for_threshold, threshold_value)
+        {
+            if res
+                .get_column_names()
+                .contains(&&PlSmallStr::from_str(threshold_col))
+            {
+                // Mask adjusted values where threshold column > threshold_value
+                let threshold_series = res.column(threshold_col)?;
+                let adjusted_col = res.column(&adjusted_col_name)?;
+
+                // Create mask: true where threshold > threshold_value
+                let mask = threshold_series.gt(&Column::new(
+                    PlSmallStr::from_str("threshold"),
+                    Series::new("threshold".into(), [threshold_val]),
+                ))?;
+
+                // Apply mask: set to null where mask is true
+                let clean = adjusted_col.zip_with(
+                    &mask,
+                    &Series::new_null("null".into(), adjusted_col.len()).into_column(),
+                )?;
+                clean.with_name(PlSmallStr::from_str(&clean_col_name))
+            } else {
+                // Threshold column not found, use adjusted as clean
                 res.column(&adjusted_col_name)?
                     .clone()
                     .with_name(PlSmallStr::from_str(&clean_col_name))
-            };
+            }
+        } else {
+            // No threshold, use adjusted as clean
+            res.column(&adjusted_col_name)?
+                .clone()
+                .with_name(PlSmallStr::from_str(&clean_col_name))
+        };
 
-            res = res.with_column(clean_series.into_column())?.to_owned();
+        res = res.with_column(clean_series.into_column())?.to_owned();
 
-            column_order.push(format!("{} Adjusted", concentration_column));
-            column_order.push(format!("{} Clean", concentration_column));
-        }
-        None => {}
+        column_order.push(format!("{concentration_column} Adjusted"));
+        column_order.push(format!("{concentration_column} Clean"));
     }
 
     // Filter to only columns that exist in the result
@@ -392,14 +393,14 @@ fn run(
     let sort_cols: Vec<&str> = data_names
         .iter()
         .filter(|c| res.get_column_names().contains(&&PlSmallStr::from_str(c)))
-        .map(|s| s.as_str())
+        .map(String::as_str)
         .collect();
 
-    let mut out = if !sort_cols.is_empty() {
+    let mut out = if sort_cols.is_empty() {
+        res.select(existing_columns)?
+    } else {
         res.sort(sort_cols, SortMultipleOptions::default())?
             .select(existing_columns)?
-    } else {
-        res.select(existing_columns)?
     };
 
     let binding = out.clone();
@@ -414,23 +415,22 @@ fn run(
     out.select(&new_names)
 }
 
-fn reformat_plate_reader_data(input_file: &PathBuf, output_dir: &PathBuf) -> PolarsResult<()> {
-    let workbook: Xlsx<_> = open_workbook(input_file).map_err(|e| {
-        PolarsError::ComputeError(format!("Failed to open Excel file: {}", e).into())
-    })?;
-    let sheets = workbook.sheet_names().to_owned();
+fn reformat_plate_reader_data(input_file: &PathBuf, output_dir: &Path) -> PolarsResult<()> {
+    let workbook: Xlsx<_> = open_workbook(input_file)
+        .map_err(|e| PolarsError::ComputeError(format!("Failed to open Excel file: {e}").into()))?;
+    let sheets = workbook.sheet_names().clone();
     for sheet in sheets {
         let df = run(input_file, "[Concentration]", None, None, Some(&sheet), 23)?;
-        let mut output_file = output_dir.clone();
-        let sheet_sanitized = sheet.replace(" ", "_").replace("/", "_");
-        output_file.push(format!("{}.csv", sheet_sanitized));
+        let mut output_file = output_dir.to_path_buf();
+        let sheet_sanitized = sheet.replace([' ', '/'], "_");
+        output_file.push(format!("{sheet_sanitized}.csv"));
         df.write_to_csv_or_stdout(output_file);
     }
 
     Ok(())
 }
 
-pub fn handle_command(cmd: Commands) -> () {
+pub fn handle_command(cmd: Commands) {
     match cmd {
         Commands::ReformatPlateReaderData {
             input_file,

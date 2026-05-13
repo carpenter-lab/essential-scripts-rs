@@ -81,7 +81,7 @@ fn resolve_gene_schema(df: &DataFrame) -> PolarsResult<GeneSchema> {
 fn split_cdr3_seq(df: DataFrame, chain: &str, schema: GeneSchema) -> PolarsResult<DataFrame> {
     if chain != "alpha" && chain != "beta" {
         return Err(PolarsError::ComputeError(
-            format!("chain must be alpha or beta, not {}", chain).into(),
+            format!("chain must be alpha or beta, not {chain}").into(),
         ));
     }
 
@@ -93,11 +93,11 @@ fn split_cdr3_seq(df: DataFrame, chain: &str, schema: GeneSchema) -> PolarsResul
         _ => unreachable!(),
     };
 
-    let list_cols: Vec<String> = split_cols.iter().map(|c| format!("__{}_list", c)).collect();
+    let list_cols: Vec<String> = split_cols.iter().map(|c| format!("__{c}_list")).collect();
 
     let explode_pattern = list_cols
         .iter()
-        .map(|c| format!("^{}$", c))
+        .map(|c| format!("^{c}$"))
         .collect::<Vec<String>>()
         .join("|");
     let explode_selector = col(&explode_pattern)
@@ -128,7 +128,7 @@ fn split_cdr3_seq(df: DataFrame, chain: &str, schema: GeneSchema) -> PolarsResul
         )
         .with_columns(alias_exprs)
         .select([all()
-            .exclude_cols(list_cols.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
+            .exclude_cols(list_cols.iter().map(String::as_str).collect::<Vec<&str>>())
             .as_expr()])
         .collect()
 }
@@ -136,8 +136,8 @@ fn split_cdr3_seq(df: DataFrame, chain: &str, schema: GeneSchema) -> PolarsResul
 pub(crate) fn split_cdr3_seq_main(
     input_file: PathBuf,
     output_file: PathBuf,
-    group: Option<Vec<String>>,
-) -> () {
+    group: Option<&Vec<String>>,
+) {
     let lazy_df: LazyFrame = io::read_from_file(input_file, None);
     let mut df = lazy_df
         .collect()
@@ -147,23 +147,19 @@ pub(crate) fn split_cdr3_seq_main(
     // Keep CLI compatibility and fail early on typos in group column names.
     // If user provides group columns, validate them.
     // If not, create a unique per-row group key.
-    match &group {
-        Some(cols) => {
-            for g in cols {
-                if !df.get_column_names().iter().any(|n| n.as_str() == g) {
-                    panic!("Group column '{}' not found", g);
-                }
-            }
+    if let Some(cols) = group {
+        for g in cols {
+            assert!(
+                df.get_column_names().iter().any(|n| n.as_str() == g),
+                "Group column '{g}' not found"
+            );
         }
-        None => {
-            // One unique group per original row.
-            // This keeps alpha/beta splits anchored to original rows.
-            let row_ids: Vec<u64> = (0..df.height() as u64).collect();
-            df = df
-                .with_column(Series::new("__row_group".into(), row_ids).into())
-                .expect("Failed to add per-row fallback group")
-                .to_owned();
-        }
+    } else {
+        // One unique group per original row.
+        // This keeps alpha/beta splits anchored to original rows.
+        let row_ids: Vec<u64> = (0..df.height() as u64).collect();
+        df.with_column(Series::new("__row_group".into(), row_ids).into())
+            .expect("Failed to add per-row fallback group");
     }
 
     // Process both chains
@@ -182,14 +178,10 @@ pub(crate) fn split_cdr3_seq_main(
             .drop("__row_group")
             .expect("Failed to drop temporary row group column");
     }
-    df.write_to_flat_or_stdout(output_file, None)
+    df.write_to_flat_or_stdout(output_file, None);
 }
 
-pub(crate) fn split_sample_id(
-    input_file: PathBuf,
-    output_file: PathBuf,
-    column_name: &String,
-) -> () {
+pub(crate) fn split_sample_id(input_file: PathBuf, output_file: PathBuf, column_name: &String) {
     let df = io::read_from_file(input_file, None);
     let df = df
         .with_column(col(column_name).str().split(lit(":")))
@@ -201,10 +193,10 @@ pub(crate) fn split_sample_id(
 
     df.collect()
         .expect("Failed to collect dataframe")
-        .write_to_flat_or_stdout(output_file, None)
+        .write_to_flat_or_stdout(output_file, None);
 }
 
-pub fn handle_command(cmd: Commands) -> () {
+pub fn handle_command(cmd: Commands) {
     match cmd {
         Commands::SplitSampleId {
             input_file,
@@ -218,7 +210,7 @@ pub fn handle_command(cmd: Commands) -> () {
             output_file,
             group,
         } => {
-            split_cdr3_seq_main(input_file, output_file, group);
+            split_cdr3_seq_main(input_file, output_file, group.as_ref());
         }
     }
 }
@@ -410,7 +402,7 @@ mod tests {
         }
 
         // Missing group column should fail validation.
-        let invalid_groups = vec!["does_not_exist".to_string()];
+        let invalid_groups = ["does_not_exist".to_string()];
         let missing = invalid_groups.iter().find(|g| {
             !df.get_column_names()
                 .iter()

@@ -34,7 +34,7 @@ impl Run for DataFrame {
         //let groups = dataframe::prepare_parasail_groups(self);
         match dataframe::prepare_parasail_groups(self) {
             Err(e) => {
-                eprintln!("Error preparing parasail groups: {}", e);
+                eprintln!("Error preparing parasail groups: {e}");
                 Err(e)
             }
             Ok(groups) => {
@@ -55,7 +55,7 @@ fn score_df(df: &DataFrame, replicates: usize) -> PolarsResult<DataFrame> {
     )
 }
 
-pub(crate) fn tcr_score(input_file: PathBuf, output_file: PathBuf, replicates: usize) -> () {
+pub(crate) fn tcr_score(input_file: PathBuf, output_file: PathBuf, replicates: usize) {
     let df = LazyCsvReader::new(PlRefPath::try_from_pathbuf(input_file).unwrap())
         .finish()
         .unwrap()
@@ -63,10 +63,10 @@ pub(crate) fn tcr_score(input_file: PathBuf, output_file: PathBuf, replicates: u
         .unwrap();
 
     let res = score_df(&df, replicates).unwrap();
-    res.write_to_csv_or_stdout(output_file)
+    res.write_to_csv_or_stdout(output_file);
 }
 
-pub fn handle_command(cmd: Commands) -> () {
+pub fn handle_command(cmd: Commands) {
     match cmd {
         Commands::ScoreTCRAlignments {
             input_file,
