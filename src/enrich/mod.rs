@@ -31,6 +31,7 @@ impl fmt::Display for Library {
     }
 }
 
+#[cfg(feature = "enrichment")]
 fn must_be_none(pb: Option<&PathBuf>) -> Result<Option<PathBuf>, String> {
     match pb {
         None => Ok(None),
@@ -146,7 +147,7 @@ pub async fn handle_command(cmd: Commands) -> Result<(), Error> {
         match cmd {
             Commands::RunEnrichr { .. } => Err(Error::raw(
                 clap::error::ErrorKind::MissingSubcommand,
-                "This command requires the `enrichment` feature. Rebuild with `cargo run --features enrichment -- ...`",
+                "This command requires the `enrichment` feature. Rebuild with `--features enrichment`",
             )),
         }
     }
