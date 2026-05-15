@@ -264,7 +264,60 @@ impl Enrichment {
             }
         }
     }
+    fn draw_message_on_root<DB: DrawingBackend>(
+        root: &DrawingArea<DB, Shift>,
+        message: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+    where
+        DB::ErrorType: 'static,
+    {
+        root.fill(&WHITE)?;
+        // Draw message near center (x offset a little to the left)
+        let x = (width / 2) as i32 - 10;
+        let y = (height / 2) as i32;
+        root.draw(&Text::new(message, (x, y), ("sans-serif", 24).into_font()))?;
+        root.present()?;
+        Ok(())
+    }
+    fn render_empty_to_path(
+        _library: &str,
+        path: &Path,
+        message: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_lowercase();
 
+        match ext.as_str() {
+            "svg" => {
+                let root = SVGBackend::new(path, (width, height)).into_drawing_area();
+                Self::draw_message_on_root(&root, message, width, height)
+            }
+            "pdf" => {
+                let surface = cairo::PdfSurface::new(f64::from(width), f64::from(height), path)?;
+                let context = cairo::Context::new(&surface)?;
+                let root = CairoBackend::new(&context, (width, height))?.into_drawing_area();
+                Self::draw_message_on_root(&root, message, width, height)?;
+                surface.flush();
+                surface.finish();
+                Ok(())
+            }
+            "png" | "jpg" | "jpeg" => {
+                let path_str = path
+                    .to_str()
+                    .ok_or_else(|| format!("Invalid path: {}", path.display()))?;
+                let root = BitMapBackend::new(path_str, (width, height)).into_drawing_area();
+                Self::draw_message_on_root(&root, message, width, height)
+            }
+            other => Err(format!("Unsupported output extension: {other}").into()),
+        }
+    }
     #[allow(clippy::too_many_arguments)]
     fn render_bar_chart<DB: DrawingBackend>(
         root: &DrawingArea<DB, Shift>,
@@ -331,13 +384,15 @@ impl Enrichment {
 
         // use minimum length to avoid mismatches and panics
         let n = std::cmp::min(terms.len(), std::cmp::min(p_vals.len(), neg_log_p.len()));
+        let width = 1000u32;
+        let height = 70u32 * u32::try_from(n)?.max(5);
+
         if n == 0 {
-            return Err("No rows to plot".into());
+            let message = format!("No rows to plot for {}", library);
+            return Self::render_empty_to_path(library, path, &message, width, height);
         }
 
         let max_x = neg_log_p.iter().copied().fold(0.0_f64, f64::max).max(1.0);
-        let width = 1000u32;
-        let height = 70u32 * u32::try_from(n)?.max(5);
 
         let ext = path
             .extension()
