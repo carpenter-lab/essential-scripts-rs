@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/carpenter-lab/essential-scripts-rs/compare/v0.5.0...v0.5.1) (2026-05-15)
+
+
+### Bug Fixes
+
+* print an empty plot if no features are found ([94476a9](https://github.com/carpenter-lab/essential-scripts-rs/commit/94476a94c91ac1e31413637f96c10d99315984ea))
+* Type mismatch [E0308] expected `&cairo::context::Context`, but found `&cairo::context::Context` ([461f61c](https://github.com/carpenter-lab/essential-scripts-rs/commit/461f61c5a93e6fa969f25a68de4f1e650bb727da))
+
 ## [0.5.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v0.4.0...v0.5.0) (2026-05-13)
 
 
