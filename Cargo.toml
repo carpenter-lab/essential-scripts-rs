@@ -17,7 +17,7 @@ tokio = { version = "1.52", features = ["full"] }
 reqwest = { version = "0.13", features = ["json", "form", "multipart"], optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
-plotters-cairo = { version = "0.8", optional = true }
+plotters-cairo = { version = "0.9", optional = true }
 cairo-rs = { version = "0.21.5", optional = true, features = ["pdf"] }
 
 [dependencies.polars]
