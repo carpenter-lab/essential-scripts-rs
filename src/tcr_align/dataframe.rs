@@ -81,7 +81,7 @@ pub(crate) fn all_unique_cdr3_alpha(all_data: &DataFrame) -> PolarsResult<Vec<St
 
     let s = unique_df.column("TcRa_list")?.str()?;
     // Skip nulls and empty/whitespace-only strings produced by splitting
-    Ok(s.into_iter()
+    Ok(s.iter()
         .flatten()
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -252,7 +252,7 @@ fn get_list_cell_as_vec_utf8(
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
 
-    for x in s.str()?.into_iter().flatten() {
+    for x in s.str()?.iter().flatten() {
         let v = x.trim();
         if v.is_empty() {
             continue;
@@ -333,7 +333,8 @@ pub(crate) fn fraction_self_greater(
         .as_series()
         .expect("could not get 'pattern' column")
         .str()?
-        .into_no_null_iter()
+        .iter()
+        .flatten()
         .map(ToString::to_string)
         .collect();
 
@@ -673,7 +674,8 @@ mod tests {
             .expect("could not get series for pattern")
             .str()
             .unwrap()
-            .into_no_null_iter()
+            .iter()
+            .flatten()
             .map(|s| s.to_string())
             .collect();
         let idx = pat_vals

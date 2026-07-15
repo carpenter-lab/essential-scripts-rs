@@ -139,12 +139,12 @@ pub(crate) fn aggregate_cellranger_tcr_output(
 
     for input_file in input_files {
         let df = io::read_from_file(input_file, None);
-        dfs.push(df.with_new_streaming(true));
+        dfs.push(df.with_streaming(true));
     }
 
     let concatenated = concat(&dfs, concat_args)
         .expect("Failed to concatenate input files")
-        .with_new_streaming(true);
+        .with_streaming(true);
     let processed = process_input_lazy(concatenated, keep_alpha)
         .filter(col("CDR3b").is_not_null())
         .filter(col("CDR3b").neq(lit("")));

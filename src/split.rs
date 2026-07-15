@@ -242,7 +242,7 @@ mod tests {
         let df = df
             .column(col_name)?
             .str()?
-            .into_iter()
+            .iter()
             .map(|v| v.expect("column value should not be null"))
             .collect();
         Ok(df)

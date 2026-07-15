@@ -126,7 +126,7 @@ fn clean_concentration(col: &Column) -> PolarsResult<Series> {
     let len = str_chunked.len();
     let mut result = Vec::with_capacity(len);
 
-    for opt_str in str_chunked {
+    for opt_str in str_chunked.iter() {
         match opt_str {
             None => result.push(None),
             Some(s) => {
