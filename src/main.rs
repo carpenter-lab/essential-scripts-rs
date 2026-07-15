@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 use essential_scripts_rs::{
-    aggregate, copy_cellranger_outs, enrich, plate_reader, split, tcr_align,
+    aggregate, copy_cellranger_outs, enrich, geo_submission, plate_reader, split, tcr_align,
 };
 
 #[derive(Parser)]
@@ -29,6 +29,9 @@ enum Commands {
     TcrAlign(tcr_align::Commands),
 
     #[command(flatten)]
+    MatchFastq(geo_submission::Commands),
+
+    #[command(flatten)]
     RunEnrichr(enrich::Commands),
 }
 
@@ -39,6 +42,7 @@ pub(crate) fn main_helper(cli: Cli) {
         Some(Commands::ReformatPlateReaderData(cmd)) => plate_reader::handle_command(cmd),
         Some(Commands::CopyCellRangerOuts(cmd)) => copy_cellranger_outs::handle_command(cmd),
         Some(Commands::TcrAlign(cmd)) => tcr_align::handle_command(cmd),
+        Some(Commands::MatchFastq(cmd)) => geo_submission::handle_command(&cmd),
         Some(Commands::RunEnrichr(cmd)) => {
             if let Err(err) = enrich::handle_command(cmd) {
                 err.exit();
