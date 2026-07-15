@@ -80,32 +80,34 @@ pub fn handle_command(cmd: Commands) {
         Commands::CopyCellRangerOuts {
             base_path,
             dest,
-            pipestance_results: PipestanceResults { h5, mex, vdj },
+            pipestance_results,
             check,
         } => {
-            if let Err(e) =
-                copy_cellranger_outs_main(&base_path, Option::from(&dest), h5, mex, vdj, check)
-            {
+            if let Err(e) = copy_cellranger_outs_main(
+                &base_path,
+                Option::from(&dest),
+                &pipestance_results,
+                check,
+            ) {
                 eprintln!("{e}");
             }
         }
     }
 }
 
-fn copy_cellranger_outs_main(
+pub fn copy_cellranger_outs_main(
     base_path: &Path,
     dest: Option<&PathBuf>,
-    h5: bool,
-    mex: bool,
-    vdj: bool,
+    outs: &PipestanceResults,
     check: bool,
 ) -> io::Result<CopyStats> {
     let mut stats = CopyStats::default();
     // If in check-only mode, validate pipestances and exit
     if check {
-        check_pipestances(base_path)?;
+        let _ = check_pipestances(base_path)?;
         return Ok(stats);
     }
+    let PipestanceResults { h5, mex, vdj } = outs;
 
     if !h5 && !mex && !vdj {
         return Err(io::Error::new(
@@ -148,7 +150,7 @@ fn copy_cellranger_outs_main(
         }
         stats.pipestances_seen += 1;
 
-        match copy_outputs_for_pipestance(&dir_path, dest, h5, mex, vdj) {
+        match copy_outputs_for_pipestance(&dir_path, dest, *h5, *mex, *vdj) {
             Ok(s) => {
                 stats.samples_seen += s.samples_seen;
                 stats.h5_copied += s.h5_copied;
@@ -181,7 +183,7 @@ fn has_mri_tgz(pipestance_dir: &Path) -> io::Result<bool> {
     Ok(ok)
 }
 
-fn check_pipestances(base_path: &Path) -> io::Result<()> {
+pub(crate) fn check_pipestances(base_path: &Path) -> io::Result<usize> {
     let entries = fs::read_dir(base_path)?;
     let mut total = 0usize;
     let mut ok_count = 0usize;
@@ -210,10 +212,23 @@ fn check_pipestances(base_path: &Path) -> io::Result<()> {
         ok_count,
         total - ok_count
     );
-    Ok(())
+    if total == 0 {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "No pipestances found",
+        ))
+    } else if total != ok_count {
+        Err(io::Error::other(format!(
+            "Some pipestances failed validation: {} OK, {} missing",
+            ok_count,
+            total - ok_count
+        )))
+    } else {
+        Ok(ok_count)
+    }
 }
 
-fn list_samples(pipestance_dir: &Path) -> io::Result<Vec<PathBuf>> {
+pub fn list_samples(pipestance_dir: &Path) -> io::Result<Vec<PathBuf>> {
     let base = pipestance_dir.join(PATH_TO_OUTS);
     let mut samples = Vec::new();
     if base.is_dir() {
@@ -343,9 +358,17 @@ mod tests {
         fs::create_dir_all(&sample).unwrap();
         fs::write(sample.join("sample_filtered_feature_bc_matrix.h5"), b"abc").unwrap();
 
-        let stats =
-            copy_cellranger_outs_main(&base, Some(&dest.clone()), true, false, false, false)
-                .unwrap();
+        let stats = copy_cellranger_outs_main(
+            &base,
+            Some(&dest.clone()),
+            &PipestanceResults {
+                h5: true,
+                mex: false,
+                vdj: false,
+            },
+            false,
+        )
+        .unwrap();
 
         let out = dest.join("S1.h5");
         assert!(out.is_file());
@@ -373,9 +396,17 @@ mod tests {
         fs::create_dir_all(&nested).unwrap();
         fs::write(nested.join("ignored.txt"), b"ignore me").unwrap();
 
-        let stats =
-            copy_cellranger_outs_main(&base, Some(&dest.clone()), false, true, false, false)
-                .unwrap();
+        let stats = copy_cellranger_outs_main(
+            &base,
+            Some(&dest.clone()),
+            &PipestanceResults {
+                h5: false,
+                mex: true,
+                vdj: false,
+            },
+            false,
+        )
+        .unwrap();
         let dst_dir = dest.join("S1");
         assert!(dst_dir.is_dir());
         assert!(dst_dir.join("barcodes.tsv.gz").is_file());
@@ -401,9 +432,17 @@ mod tests {
         let sample_root = base.join("p1/outs/per_sample_outs/S1");
         fs::create_dir_all(&sample_root).unwrap();
 
-        let stats =
-            copy_cellranger_outs_main(&base, Some(&dest.clone()), false, true, false, false)
-                .unwrap();
+        let stats = copy_cellranger_outs_main(
+            &base,
+            Some(&dest.clone()),
+            &PipestanceResults {
+                h5: false,
+                mex: true,
+                vdj: false,
+            },
+            false,
+        )
+        .unwrap();
 
         // Destination S1 dir should have been created then cleaned up
         assert!(!dest.join("S1").exists());
@@ -426,9 +465,17 @@ mod tests {
         fs::create_dir_all(&vdj_dir).unwrap();
         fs::write(vdj_dir.join("filtered_contig_annotations.csv"), b"contigs").unwrap();
 
-        let stats =
-            copy_cellranger_outs_main(&base, Some(&dest.clone()), false, false, true, false)
-                .unwrap();
+        let stats = copy_cellranger_outs_main(
+            &base,
+            Some(&dest.clone()),
+            &PipestanceResults {
+                h5: false,
+                mex: false,
+                vdj: true,
+            },
+            false,
+        )
+        .unwrap();
 
         let out = dest.join("S1.csv");
         assert!(out.is_file());
@@ -452,8 +499,17 @@ mod tests {
         fs::create_dir_all(&preexisting).unwrap();
         fs::write(preexisting.join("keep.txt"), b"keep").unwrap();
 
-        let stats =
-            copy_cellranger_outs_main(&base, Some(&dest), false, true, false, false).unwrap();
+        let stats = copy_cellranger_outs_main(
+            &base,
+            Some(&dest),
+            &PipestanceResults {
+                h5: false,
+                mex: true,
+                vdj: false,
+            },
+            false,
+        )
+        .unwrap();
 
         assert!(preexisting.is_dir());
         assert!(preexisting.join("keep.txt").is_file());
@@ -462,4 +518,3 @@ mod tests {
         assert_eq!(stats.mex_dirs_cleaned_up, 0);
     }
 }
-//  cargo llvm-cov nextest --lcov > lcov.info && CODECOV_TOKEN=f422086d-6daa-4023-a8a0-52138db98a50 bash <(curl -s https://codecov.io/bash)
