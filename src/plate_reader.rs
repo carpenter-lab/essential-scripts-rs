@@ -216,7 +216,7 @@ fn prepare_data(
     let mut data_cols = Vec::new();
     for &col_name in &col_names {
         let col = df.column(col_name)?;
-        let sliced = col.slice(data_row_start as i64, data_stride * 8);
+        let sliced = col.slice(i64::try_from(data_row_start).unwrap(), data_stride * 8);
         data_cols.push(sliced);
     }
     let data_slice = DataFrame::new_infer_height(data_cols)?;
