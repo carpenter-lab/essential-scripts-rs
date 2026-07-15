@@ -5,6 +5,26 @@ use std::sync::OnceLock;
 
 static BLOSUM62: OnceLock<Result<Matrix, String>> = OnceLock::new();
 
+/// Retrieves the BLOSUM62 substitution matrix, used in bioinformatics for scoring alignments
+/// between sequences such as proteins. The matrix is cached for efficiency to prevent
+/// reloading it multiple times.
+///
+/// # Returns
+/// - `Ok(&'static Matrix)` containing a reference to the BLOSUM62 matrix if successfully loaded.
+/// - `Err(PolarsError::ComputeError)` if there was an error loading the matrix.
+///
+/// The cache is initialized using `BLOSUM62.get_or_init` which attempts to load the matrix
+/// from file or another source. On failure, the error is wrapped into a `PolarsError::ComputeError`.
+///
+/// # Errors
+/// Returns a `PolarsError::ComputeError` if the matrix could not be loaded, along with the
+/// underlying error message.
+///
+/// # Example
+/// ```ignore
+/// let matrix = blosum62();
+/// // Use the matrix for sequence alignment or scoring
+/// ```
 fn blosum62() -> PolarsResult<&'static Matrix> {
     let cached = BLOSUM62.get_or_init(|| {
         Matrix::from("blosum62").map_err(|e| format!("failed to load blosum62 matrix: {e}"))
@@ -16,6 +36,41 @@ fn blosum62() -> PolarsResult<&'static Matrix> {
     }
 }
 
+/// Constructs a protein sequence aligner with specified gap penalty parameters.
+///
+/// This function initializes and builds a global protein sequence aligner using the BLOSUM62
+/// substitution matrix. The gap penalty parameters `gap_open` and `gap_extend` control the
+/// penalties for opening and extending gaps in the alignment, respectively.
+///
+/// # Arguments
+///
+/// - `gap_open` - An `i32` representing the penalty for opening a gap in the alignment.
+/// - `gap_extend` - An `i32` representing the penalty for extending an existing gap in the alignment.
+///
+/// # Returns
+///
+/// - `PolarsResult<Aligner>` - A result containing the constructed `Aligner` instance if successful,
+///   or an error if the matrix initialization fails.
+///
+/// # Errors
+///
+/// This function may return an error in the event that the BLOSUM62 substitution matrix cannot
+/// be retrieved or cloned.
+///
+/// # Example
+///
+/// ```ignore
+/// let gap_open = -10;
+/// let gap_extend = -1;
+/// let aligner = build_protein_aligner(gap_open, gap_extend).expect("Failed to build aligner");
+/// ```
+///
+/// # Notes
+///
+/// - This implementation ensures that the matrix is cloned into the aligner to avoid any
+///   lifetime issues, as the substitution matrix is typically a lightweight handle.
+///
+/// - The aligner is configured for global sequence alignment by default.
 pub fn build_protein_aligner(gap_open: i32, gap_extend: i32) -> PolarsResult<Aligner> {
     // Clone the cached matrix handle into this aligner.
     // (Matrix is typically a thin handle; cloning avoids lifetime issues.)
@@ -29,6 +84,57 @@ pub fn build_protein_aligner(gap_open: i32, gap_extend: i32) -> PolarsResult<Ali
         .build())
 }
 
+/// Executes pairwise sequence alignment using the given `Aligner` over a set of input sequences
+/// and optionally a reference set of sequences. Computes the average alignment score.
+///
+/// # Parameters
+/// - `aligner`: A reference to an `Aligner` object that performs the sequence alignment.
+/// - `a`: A slice of query input sequences, where each sequence implements the `AsRef<str>` trait.
+/// - `reference`: An optional slice of reference sequences. If `None`, the function performs
+///   pairwise alignment between all sequences in `a`.
+///
+/// # Returns
+/// - `PolarsResult<f64>`:
+///   - On success, returns the average alignment score as a `f64`.
+///   - Returns `NaN` if there are no valid alignments (`n == 0`).
+///   - On failure, returns a `PolarsError` if an error occurs during the alignment process or other
+///     computation-related issues.
+///
+/// # Errors
+/// - Returns `PolarsError::ComputeError` in the following cases:
+///   - If the input sequence list `a` is empty.
+///   - If the alignment operation in the `Aligner` fails, encapsulating the specific error message.
+///
+/// # Alignment Procedure
+/// - If `reference` is `Some(b)`:
+///   - Each sequence in `a` is aligned against every sequence in `b`.
+/// - If `reference` is `None`:
+///   - Pairwise alignment is performed within the list of sequences in `a`. Each sequence is aligned
+///     with every other sequence in `a` once (excluding self-alignments).
+///
+/// # Example
+/// ```ignore
+/// use some_alignment_lib::{Aligner, run_parasail};
+///
+/// let aligner = Aligner::new(); // Aligner initialization
+/// let sequences = vec!["ATCG", "GCTA", "TACG"];
+/// let reference_sequences = vec!["GCTAGC", "ATCGAT"];
+///
+/// // Align against reference sequences
+/// let score_with_ref = run_parasail(&aligner, &sequences, Some(&reference_sequences)).unwrap();
+///
+/// // Perform pairwise alignment within `sequences` only
+/// let score_without_ref = run_parasail(&aligner, &sequences, None).unwrap();
+/// ```
+///
+/// # Notes
+/// - This function leverages parallel alignment computations via the `Aligner`.
+/// - The alignment scores are summed, and the average is computed as `(sum of scores) / (number of alignments)`.
+///   If no alignments are performed, the function safely returns `NaN`.
+///
+/// # Panics
+/// This function does not explicitly panic but may propagate panics from the `Aligner`'s `align` method
+/// if it does not properly handle internal errors.
 pub fn run_parasail<S: AsRef<str>>(
     aligner: &Aligner,
     a: &[S],

@@ -15,6 +15,51 @@ use std::collections::HashSet;
 const MAX_GROUP_SEQS: usize = 1000;
 const MAX_BG_SEQS: usize = 1000;
 
+/// Extracts all unique TcRa CDR3 alpha sequences from a given `DataFrame`.
+///
+/// This function processes a `DataFrame` containing a column `TcRa`, where each entry may
+/// contain semicolon-separated CDR3 alpha sequences. It performs the following steps:
+///
+/// 1. Creates a lazy frame from the input `DataFrame`.
+/// 2. Selects the `TcRa` column.
+/// 3. Splits the semicolon-separated strings in `TcRa` into lists and stores them in a new column `TcRa_list`.
+/// 4. Explodes the lists in `TcRa_list` such that each list element becomes a separate row.
+/// 5. Filters out any null values from the exploded column.
+/// 6. Extracts unique values from the `TcRa_list` column, keeping only the first occurrence of each value.
+/// 7. Collects the unique values into a new `DataFrame`.
+/// 8. Processes the resulting series to skip nulls and empty/whitespace-only strings, returning the unique CDR3 alpha sequences as a vector of strings.
+///
+/// # Arguments
+///
+/// * `all_data` - A reference to a `DataFrame` containing the input data with a column named `TcRa`.
+///
+/// # Returns
+///
+/// * `PolarsResult<Vec<String>>` - A result containing a vector of unique CDR3 alpha sequences as strings,
+///   or an error if any part of the processing fails.
+///
+/// # Errors
+///
+/// This function returns a `PolarsResult::Err` in the following cases:
+/// - When the input `DataFrame` does not contain a column named `TcRa`.
+/// - When any operation (e.g., splitting, exploding, or collecting unique values) fails internally.
+/// - When an unexpected null value or type mismatch is encountered.
+///
+/// # Examples
+///
+/// ```ignore
+/// use polars::prelude::*;
+///
+/// // Create a sample DataFrame
+/// let df = DataFrame::new(vec![
+///     Series::new("TcRa", &["CDR3A1;CDR3A2", "CDR3A3", "CDR3A2;CDR3A4;  ", ""]),
+/// ]).unwrap();
+///
+/// // Extract all unique CDR3 alpha sequences
+/// let result = all_unique_cdr3_alpha(&df).unwrap();
+///
+/// assert_eq!(result, vec!["CDR3A1", "CDR3A2", "CDR3A3", "CDR3A4"]);
+/// ```
 pub(crate) fn all_unique_cdr3_alpha(all_data: &DataFrame) -> PolarsResult<Vec<String>> {
     let lf = all_data.clone().lazy();
     let unique_df = lf
@@ -44,6 +89,59 @@ pub(crate) fn all_unique_cdr3_alpha(all_data: &DataFrame) -> PolarsResult<Vec<St
         .collect())
 }
 
+/// Prepares parasail groups by processing and transforming the input `DataFrame`.
+///
+/// This function performs the following steps on the input `DataFrame`:
+/// 1. Selects the `pattern`, `TcRa`, and `TcRb` columns.
+/// 2. Eliminates duplicate rows, keeping the first occurrence.
+/// 3. Splits the `TcRa` column into individual elements by a delimiter (`;`),
+///    explodes it into multiple rows, and renames the column back to `TcRa`.
+/// 4. Splits the `TcRb` column into individual elements by a delimiter (`;`),
+///    explodes it into multiple rows, and renames the column back to `TcRb`.
+/// 5. Deduplicates pairs of `TcRa` and `TcRb` after the explosion step.
+/// 6. Groups data by the `pattern` column and aggregates the following:
+///    - A count of records in the group (`n`).
+///    - Unique values of `TcRa` as a list.
+///    - Unique values of `TcRb` as a list.
+/// 7. Filters out groups that have no members (where `n` > 0).
+///
+/// # Arguments
+///
+/// * `all_data` - A `DataFrame` containing the input data to be processed.
+///
+/// # Returns
+///
+/// Returns a `PolarsResult<DataFrame>` that contains the transformed and grouped data
+/// with columns:
+/// - `pattern`
+/// - `n` (count of group members)
+/// - `TcRa` (list of unique `TcRa` values)
+/// - `TcRb` (list of unique `TcRb` values)
+///
+/// # Errors
+///
+/// This function will return an error if any of the following operations fail:
+/// - Applying transformations (e.g., splitting, exploding, renaming columns).
+/// - Grouping, aggregating, or filtering the `DataFrame`.
+/// - Collecting the lazy `DataFrame` into a concrete `DataFrame`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use polars::prelude::*;
+///
+/// let data = df! {
+///     "pattern" => &["A", "A", "B"],
+///     "TcRa" => &["x;y", "z", "a;b"],
+///     "TcRb" => &["m", "n;o", "p"]
+/// };
+///
+/// let result = prepare_parasail_groups(&data).unwrap();
+/// println!("{:?}", result);
+/// ```
+///
+/// The resulting `DataFrame` will contain grouped and transformed data based
+/// on the described logic.
 pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> PolarsResult<DataFrame> {
     let lf = all_data
         .clone()
@@ -102,6 +200,45 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> PolarsResult<Data
     grouped.collect()
 }
 
+/// Extracts a unique, trimmed, and non-empty list of UTF-8 strings from a `List` cell
+/// in a specified column of a `DataFrame`. The order of the strings is preserved based
+/// on their first occurrence.
+///
+/// # Arguments
+/// * `df` - A reference to the `DataFrame` from which the data is to be extracted.
+/// * `col_name` - The name of the column containing the `List` cell to extract.
+/// * `row_idx` - The index of the row containing the `List` cell to extract.
+///
+/// # Returns
+/// Returns a `PolarsResult` containing a `Vec<String>` of unique, non-empty, and
+/// trimmed strings.
+///
+/// # Errors
+/// * Returns an error if the specified column does not exist or is not of type `List`.
+/// * Returns an error if the specified row index is out of bounds.
+/// * Panics if the `List` cell cannot be converted into a series or if there are unexpected
+///   data types.
+///
+/// # Example
+/// ```ignore
+/// use polars::prelude::*;
+///
+/// # fn main() -> PolarsResult<()> {
+///     let s0 = Series::new("list_column", &[
+///         Series::new("inner", &["a", "b", "c"]),
+///         Series::new("inner", &["c", "d", ""]),
+///     ]);
+///     let df = DataFrame::new(vec![s0])?;
+///
+///     let result = get_list_cell_as_vec_utf8(&df, "list_column", 1)?;
+///     assert_eq!(result, vec!["c", "d"]);
+/// #    Ok(())
+/// # }
+/// ```
+///
+/// # Notes
+/// * The function skips any empty strings found in the `List`.
+/// * Strings are trimmed of leading and trailing whitespace.
 fn get_list_cell_as_vec_utf8(
     df: &DataFrame,
     col_name: &str,
@@ -129,6 +266,59 @@ fn get_list_cell_as_vec_utf8(
     Ok(out)
 }
 
+/// Computes alignment scores and their relative fractions for a given dataset of patterns.
+///
+/// This function processes a dataset (`groups`) containing biological patterns (e.g., DNA, RNA, or protein sequences)
+/// and computes alignment scores against self and a background distribution. It calculates specific columns based
+/// on alignment scores and generates a new `DataFrame` containing the results.
+///
+/// ### Parameters
+/// - `groups: &DataFrame`
+///   - Input `DataFrame` containing the data to process.
+///   - This `DataFrame` must include a column named `"pattern"` containing the specific patterns as strings.
+/// - `all_unique_alpha: &[String]`
+///   - A reference to a list of unique alphanumeric characters that can be used in the alignment process.
+/// - `n_replicates: usize`
+///   - The number of random background replicates to perform for comparison during alignment score calculation.
+/// - `gap_open: i32`
+///   - The penalty score for opening a gap in the alignment process. Negative values are usually assigned.
+/// - `gap_extend: i32`
+///   - The penalty score for extending an existing gap in the alignment process. Negative values are usually assigned.
+///
+/// ### Returns
+/// - `PolarsResult<DataFrame>`
+///   - A result containing the new `DataFrame` if successful, or an error if there is a failure during processing.
+///
+/// ### Output `DataFrame` Schema
+/// - The resulting `DataFrame` contains the following columns:
+///   1. `"pattern"` (`String`): The original patterns from the input `DataFrame`.
+///   2. `"TcRa_alignment_score"` (`f64`): Self-alignment scores for the patterns against `TcRa` sequences.
+///   3. `"TcRb_alignment_score"` (`f64`): Self-alignment scores for the patterns against `TcRb` sequences.
+///   4. `"TcRa_alignment_score_v_background"` (`f64`): The fractions of `TcRa` self-alignment scores compared to background replicates.
+///
+/// ### Notes
+/// This function makes use of the `SmallRng` random number generator from the `rand` crate to introduce stochasticity
+/// in calculating background replicates. The `calculate_scores` function
+/// performs the core operations for score calculation.
+///
+/// ### Errors
+/// - If the `"pattern"` column is missing or cannot be converted, an error is returned.
+/// - Errors arising from the `Polars` library (e.g., column manipulations or `DataFrame` creation) will also be propagated.
+///
+/// ### Example Usage
+/// ```ignore
+/// use polars::prelude::*;
+///
+/// // Example input DataFrame.
+/// let df = df!(
+///     "pattern" => &["ACGT", "GGCTA", "TTAACG"]
+/// )?;
+///
+/// let all_unique_alpha = vec!["A".to_string(), "C".to_string(), "G".to_string(), "T".to_string()];
+/// let result = fraction_self_greater(&df, &all_unique_alpha, 10, -5, -1)?;
+///
+/// println!("{:?}", result);
+/// ```
 pub(crate) fn fraction_self_greater(
     groups: &DataFrame,
     all_unique_alpha: &[String],
@@ -197,6 +387,110 @@ fn downsample_vec(
     out
 }
 
+/// Calculates scores based on the given input parameters. This function performs multiple
+/// alignments, calculates self-similarity scores, and evaluates the statistical significance
+/// of these scores against background sequences. It also handles the generation of progress
+/// bars for tracking computation progress.
+///
+/// # Parameters
+///
+/// - `groups`: A `DataFrame` containing input data, each row corresponding to a single group
+///   of items for which scores are calculated.
+/// - `all_unique_alpha`: A reference to a vector of all unique alpha sequences to be used for
+///   background sampling during statistical significance evaluation.
+/// - `n_replicates`: The number of replicates to run for statistical significance evaluation.
+/// - `gap_open`: Gap opening penalty value used by the aligner during sequence alignment.
+/// - `gap_extend`: Gap extension penalty value used by the aligner during sequence alignment.
+/// - `height`: The number of groups (or rows in `groups`) to process.
+/// - `patterns`: A slice of strings representing the patterns used to process each group.
+/// - `out_pattern`: A mutable reference to a vector where the output patterns will be stored.
+/// - `out_self_a`: A mutable reference to a vector where self-similarity scores for `TcRa`
+///   sequences will be stored.
+/// - `out_self_b`: A mutable reference to a vector where self-similarity scores for `TcRb`
+///   sequences will be stored.
+/// - `out_frac`: A mutable reference to a vector where fraction scores (statistical significance)
+///   will be stored.
+/// - `rng`: A mutable reference to a random number generator (`SmallRng`) used for background
+///   sampling and random operations.
+///
+/// # Behavior
+///
+/// - The function first initializes progress bars to track progress of the computation. If a
+///   progress bar fails to initialize, the computation continues with hidden progress indicators.
+/// - A protein aligner is built using the provided `gap_open` and `gap_extend` penalties. If the
+///   aligner fails to initialize, an error message is printed and the function exits early.
+/// - Iterates over all rows (or groups) in the `groups` dataset (up to `height` number of items).
+///   For each group:
+///   - Processes the `TcRb` sequences and calculates their self-similarity scores. If no valid
+///     data is found, `NaN` is stored in the output vectors.
+///   - Similarly processes the `TcRa` sequences to calculate their self-similarity.
+///   - Performs statistical significance testing using background sequences sampled from
+///     `all_unique_alpha`. Fraction scores representing the proportion of replicates where the
+///     observed self-similarity score is better (lower) than the background score are calculated
+///     and stored in the `out_frac` vector.
+///   - Outputs `NaN` values for groups with insufficient data or patterns marked as "single".
+/// - Updates the progress bars as the computation proceeds.
+///
+/// # Errors
+///
+/// - If there are issues with building the protein aligner or running the parasail alignment
+///   library, error messages are printed and `NaN` values are assigned to the relevant outputs.
+/// - Errors associated with accessing data from the `groups` dataset are handled by assigning
+///   `NaN` values to the output scores.
+///
+/// # Notes
+///
+/// - The function uses `indicatif::ProgressBar` and `indicatif::MultiProgress` to provide a user
+///   interface for tracking progress.
+/// - This function is designed to handle large input datasets efficiently and supports parallel
+///   computation for statistical evaluations using the parasail alignment library.
+/// - The function assumes a maximum number of background sequences (`MAX_BG_SEQS`) for comparisons.
+/// - The provided patterns must align with the rows in `groups`, and missing patterns or invalid
+///   indices result in default or `NaN` outputs.
+///
+/// # Example Usage
+///
+/// ```ignore
+/// use rand::rngs::SmallRng;
+/// use rand::SeedableRng;
+/// let mut rng = SmallRng::from_entropy();
+///
+/// let groups = load_dataframe(); // Load a DataFrame from some source.
+/// let all_unique_alpha = vec![String::from("SEQ1"), String::from("SEQ2")];
+/// let height = groups.height();
+/// let n_replicates = 100;
+/// let mut out_pattern = vec![];
+/// let mut out_self_a = vec![];
+/// let mut out_self_b = vec![];
+/// let mut out_frac = vec![];
+///
+/// calculate_scores(
+///     &groups,
+///     &all_unique_alpha,
+///     n_replicates,
+///     -10,
+///     -1,
+///     height,
+///     &vec![String::from("pattern1"), String::from("pattern2")],
+///     &mut out_pattern,
+///     &mut out_self_a,
+///     &mut out_self_b,
+///     &mut out_frac,
+///     &mut rng,
+/// );
+/// ```
+///
+/// # Dependencies
+///
+/// - Requires the `indicatif` crate for progress bars.
+/// - Uses the `rand` crate for random number generation.
+/// - Relies on the parasail alignment library for sequence alignment operations.
+///
+/// # Performance Considerations
+///
+/// - The function is designed to handle large datasets, but its runtime is directly proportional
+///   to the number of replicates (`n_replicates`) and the size of the sequences. Adjust these
+///   parameters based on available computational resources.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_lines)]
 fn calculate_scores(
