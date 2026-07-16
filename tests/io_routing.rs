@@ -1,5 +1,6 @@
 use essential_scripts_rs::io::{WriteToCsvOrStdout, read_from_file};
 use polars::prelude::*;
+use pretty_assertions::assert_eq;
 use rstest::rstest;
 use std::fs;
 use std::path::PathBuf;

@@ -35,18 +35,36 @@ enum Commands {
     RunEnrichr(enrich::Commands),
 }
 
+macro_rules! exit_on_error_feature_subcommand {
+    ($cli:ty, $expr:expr) => {
+        if let Err(err) = $expr {
+            match err.kind() {
+                clap::error::ErrorKind::MissingSubcommand => {
+                    let mut c = <$cli as clap::CommandFactory>::command();
+                    c.error(
+                        clap::error::ErrorKind::MissingSubcommand,
+                        err.to_string().replace("error: ", ""),
+                    )
+                    .exit();
+                }
+                _ => err.exit(),
+            }
+        }
+    };
+}
+
 pub(crate) fn main_helper(cli: Cli) {
     match cli.command {
         Some(Commands::Aggregate(cmd)) => aggregate::handle_command(cmd),
         Some(Commands::Split(cmd)) => split::handle_command(cmd),
         Some(Commands::ReformatPlateReaderData(cmd)) => plate_reader::handle_command(cmd),
         Some(Commands::CopyCellRangerOuts(cmd)) => copy_cellranger_outs::handle_command(cmd),
-        Some(Commands::TcrAlign(cmd)) => tcr_align::handle_command(cmd),
+        Some(Commands::TcrAlign(cmd)) => {
+            exit_on_error_feature_subcommand!(Cli, tcr_align::handle_command(cmd))
+        }
         Some(Commands::MatchFastq(cmd)) => geo_submission::handle_command(&cmd),
         Some(Commands::RunEnrichr(cmd)) => {
-            if let Err(err) = enrich::handle_command(cmd) {
-                err.exit();
-            }
+            exit_on_error_feature_subcommand!(Cli, enrich::handle_command(cmd))
         }
         None => {}
     }

@@ -10,8 +10,8 @@ categories = ["command-line-utilities", "science::bioinformatics"]
 [dependencies]
 clap = { version = "4.6", features = ["derive", "wrap_help", "string"] }
 indicatif = "0.18"
-rand = "0.10"
-parasail-rs = "0.9"
+rand = { version = "0.10", optional = true }
+parasail-rs = { version = "0.9", optional = true }
 calamine = "0.36"
 tokio = { version = "1.52", features = ["full"] }
 regex = "1.12"
@@ -39,6 +39,7 @@ features = ["svg_backend", "bitmap_backend", "ttf", "bitmap_encoder"]
 [features]
 default = []
 enrichment = ["dep:reqwest", "dep:serde", "dep:serde_json", "dep:plotters", "dep:plotters-cairo", "dep:cairo-rs"]
+tcr = ["dep:parasail-rs", "dep:rand"]
 
 [profile.release]
 opt-level = 3

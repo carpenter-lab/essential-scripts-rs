@@ -344,6 +344,7 @@ fn cleanup_mex_dir_if_new(stats: &mut CopyStats, dst_dir: &PathBuf, dst_dir_newl
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use rstest::rstest;
     use std::fs;
     use tempfile::tempdir;

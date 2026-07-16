@@ -5,9 +5,8 @@ mod core;
 
 use clap::{Error, Subcommand, ValueEnum};
 use std::fmt;
-#[cfg(feature = "enrichment")]
-use std::fs;
 use std::path::PathBuf;
+use tokio;
 
 #[derive(Clone, ValueEnum, Debug)]
 pub enum Library {
@@ -69,47 +68,6 @@ pub enum Commands {
     },
 }
 
-#[cfg(feature = "enrichment")]
-async fn enrich_command(
-    library: String,
-    gene_list: PathBuf,
-    background: Option<PathBuf>,
-    output_file: PathBuf,
-    output_plot: Vec<PathBuf>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let genes: Vec<String> = fs::read_to_string(&gene_list)?
-        .lines()
-        .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty())
-        .collect();
-    let libraries = vec![library.clone()];
-    let mut enrich = core::Enrichment::new(genes, libraries);
-
-    if let Some(path) = &background {
-        let bg_genes: Vec<String> = fs::read_to_string(path)?
-            .lines()
-            .map(|line| line.trim().to_string())
-            .filter(|line| !line.is_empty())
-            .collect();
-        enrich.with_background(bg_genes);
-    }
-    enrich.build();
-    enrich.run().await?;
-
-    if let Some(short_id) = enrich.get_short_id()
-        && background.is_none()
-    {
-        println!(
-            "Results can be found at: https://maayanlab.cloud/Enrichr/enrich?dataset={short_id}"
-        );
-    }
-    enrich.save_results(output_file)?;
-    enrich
-        .bar_plot(output_plot, Some(library), None, None)
-        .await?;
-    Ok(())
-}
-
 #[tokio::main]
 pub async fn handle_command(cmd: Commands) -> Result<(), Error> {
     #[cfg(feature = "enrichment")]
@@ -125,7 +83,7 @@ pub async fn handle_command(cmd: Commands) -> Result<(), Error> {
                 if let Err(e) = must_be_none(background.as_ref()) {
                     return Err(Error::raw(clap::error::ErrorKind::ValueValidation, e));
                 }
-                match enrich_command(
+                match core::enrich_command(
                     library.to_string(),
                     gene_list,
                     background,
