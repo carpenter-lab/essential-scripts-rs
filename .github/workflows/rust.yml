@@ -44,7 +44,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libparasail-dev parasail cmake clang
       - name: Build and Test
-        run: cargo llvm-cov nextest --lcov --output-path lcov.info --profile ci
+        run: cargo llvm-cov nextest --lcov --output-path lcov.info --profile ci --all-features --all-targets
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v6
