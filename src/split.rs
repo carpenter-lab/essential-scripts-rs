@@ -218,6 +218,7 @@ pub fn handle_command(cmd: Commands) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use rstest::rstest;
 
     fn expected_split_cdr3a() -> Vec<&'static str> {

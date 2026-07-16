@@ -42,9 +42,17 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libparasail-dev parasail cmake clang
+          sudo apt-get install -y \
+            libparasail-dev \
+            parasail \
+            cmake \
+            clang \
+            libglib2.0-dev \
+            libcairo2-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev
       - name: Build and Test
-        run: cargo llvm-cov nextest --lcov --output-path lcov.info --profile ci
+        run: cargo llvm-cov nextest --lcov --output-path lcov.info --profile ci --all-features --all-targets
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v6
