@@ -230,13 +230,11 @@ impl Enrichment {
         let df: Vec<LazyFrame> = self
             .results
             .iter()
-            .map(|result| result.to_dataframe().unwrap().lazy())
-            .collect();
+            .map(|result| result.to_dataframe().map(|df| df.lazy()))
+            .collect::<Result<Vec<_>, _>>()?;
         let combined_df = concat(df, UnionArgs::default())?;
         println!("{}", combined_df.clone().collect()?);
-        tokio::task::block_in_place(|| {
-            combined_df.write_to_tsv_or_stdout(path_buf);
-        });
+        tokio::task::block_in_place(|| combined_df.write_to_tsv_or_stdout(path_buf));
         Ok(())
     }
 
@@ -273,10 +271,13 @@ impl Enrichment {
     where
         DB::ErrorType: 'static,
     {
+        const CENTER_DIVISOR: u32 = 2;
+        const TEXT_X_OFFSET: i32 = 10;
         root.fill(&WHITE)?;
         // Draw message near center (x offset a little to the left)
-        let x = (width / 2) as i32 - 10;
-        let y = (height / 2) as i32;
+
+        let x = (width / CENTER_DIVISOR) as i32 - TEXT_X_OFFSET;
+        let y = (height / CENTER_DIVISOR) as i32;
         root.draw(&Text::new(message, (x, y), ("sans-serif", 24).into_font()))?;
         root.present()?;
         Ok(())
@@ -372,6 +373,9 @@ impl Enrichment {
         color_secondary: RGBColor,
         top_n: usize,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        const BAR_HEIGHT_PER_ITEM: u32 = 70;
+        const MIN_BAR_ROWS: u32 = 5;
+
         // Build top-N
         let top = results.get_top_n(top_n);
 
@@ -385,7 +389,7 @@ impl Enrichment {
         // use minimum length to avoid mismatches and panics
         let n = std::cmp::min(terms.len(), std::cmp::min(p_vals.len(), neg_log_p.len()));
         let width = 1000u32;
-        let height = 70u32 * u32::try_from(n)?.max(5);
+        let height = BAR_HEIGHT_PER_ITEM * u32::try_from(n)?.max(MIN_BAR_ROWS);
 
         if n == 0 {
             let message = format!("No rows to plot for {}", library);
@@ -506,7 +510,9 @@ impl Enrichment {
         let inner_res: Result<(), Box<dyn std::error::Error + Send + Sync>> = match join_result {
             Ok(res) => res,
             Err(join_err) => {
-                return Err(Box::from(format!("JoinError: {join_err}")));
+                return Err(Box::from(format!(
+                    "Failed to execute bar plot rendering task: {join_err}"
+                )));
             }
         };
 

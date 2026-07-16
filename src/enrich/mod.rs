@@ -77,17 +77,19 @@ async fn enrich_command(
     output_file: PathBuf,
     output_plot: Vec<PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let genes: Vec<String> = fs::read_to_string(&gene_list)
+    let genes: Vec<String> = fs::read_to_string(&gene_list)?
+        .lines()
         .map(|line| line.trim().to_string())
-        .into_iter()
+        .filter(|line| !line.is_empty())
         .collect();
     let libraries = vec![library.clone()];
     let mut enrich = core::Enrichment::new(genes, libraries);
 
     if let Some(path) = &background {
-        let bg_genes: Vec<String> = fs::read_to_string(path)
+        let bg_genes: Vec<String> = fs::read_to_string(path)?
+            .lines()
             .map(|line| line.trim().to_string())
-            .into_iter()
+            .filter(|line| !line.is_empty())
             .collect();
         enrich.with_background(bg_genes);
     }
