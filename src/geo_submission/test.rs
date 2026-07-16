@@ -32,9 +32,9 @@ fn test_process_cores(
     #[case] requested: Option<i32>,
     #[case] expected: usize,
 ) {
-    if let Ok(cores) = process_cores_with_available(available_cores, requested) {
-        assert_eq!(cores, expected);
-    }
+    let cores = process_cores_with_available(available_cores, requested)
+        .expect("process_cores_with_available should succeed for this test case");
+    assert_eq!(cores, expected);
 }
 
 #[rstest]
