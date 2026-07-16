@@ -85,15 +85,19 @@ fn make_progress_bar(
 
 const TOO_MANY_CORES_SUBTRACTED_ERROR: &str = "cannot subtract more cores than available";
 
-fn process_cores(requested_cores: Option<i32>) -> Result<usize, String> {
-    let available_cores = num_cpus::get();
-
+fn process_cores_with_available(
+    available_cores: usize,
+    requested_cores: Option<i32>,
+) -> Result<usize, String> {
     match requested_cores {
         None | Some(0) => Ok(available_cores),
-        #[allow(clippy::cast_sign_loss)]
         Some(requested) if requested > 0 => Ok(requested as usize),
         Some(requested) => subtract_from_available_cores(available_cores, requested),
     }
+}
+
+fn process_cores(requested_cores: Option<i32>) -> Result<usize, String> {
+    process_cores_with_available(num_cpus::get(), requested_cores)
 }
 
 fn subtract_from_available_cores(available_cores: usize, requested: i32) -> Result<usize, String> {

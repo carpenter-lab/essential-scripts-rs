@@ -10,5 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libglib2.0-dev \
+            libcairo2-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev
       - name: Run Clippy
         run: cargo clippy --all-features
