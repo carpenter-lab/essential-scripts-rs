@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v0.5.1...v1.0.0) (2026-07-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* modularize TCR alignment functionality ([#36](https://github.com/carpenter-lab/essential-scripts-rs/issues/36))
+
+### Features
+
+* add subcommand to prepare FastQ files for submission to GEO ([b88f3cb](https://github.com/carpenter-lab/essential-scripts-rs/commit/b88f3cb58ac5203405f38fe20b3cbefb6ecc56d8))
+* modularize TCR alignment functionality ([#36](https://github.com/carpenter-lab/essential-scripts-rs/issues/36)) ([d14df35](https://github.com/carpenter-lab/essential-scripts-rs/commit/d14df356223098e56435e76b8f69a93cbd5ed414))
+
+
+### Bug Fixes
+
+* correct type conversion in slice method for data_row_start ([b1eea69](https://github.com/carpenter-lab/essential-scripts-rs/commit/b1eea69bf4559e156fbc0c495dd0c3f528484e85))
+
 ## [0.5.1](https://github.com/carpenter-lab/essential-scripts-rs/compare/v0.5.0...v0.5.1) (2026-05-15)
 
 
