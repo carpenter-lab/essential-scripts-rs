@@ -47,7 +47,10 @@ pub fn handle_command(cmd: Commands) -> Result<(), Error> {
             input_file,
             output_file,
             replicates,
-        } => Ok(core::tcr_score(input_file, output_file, replicates)),
+        } => {
+            core::tcr_score(input_file, output_file, replicates);
+            Ok(())
+        }
     }
     #[cfg(not(feature = "tcr"))]
     match cmd {
