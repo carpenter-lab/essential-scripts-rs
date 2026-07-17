@@ -1017,7 +1017,7 @@ dependencies = [
 
 [[package]]
 name = "essential-scripts-rs"
-version = "0.5.1"
+version = "1.0.0"
 dependencies = [
  "assert_cmd",
  "cairo-rs",
