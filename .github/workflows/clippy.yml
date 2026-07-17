@@ -1,6 +1,12 @@
-on: push
 name: Clippy Lint
 
+on:
+  push:
+    branches: [ "main" ]
+    tags-ignore:
+      - 'v*'
+  pull_request:
+    branches: [ "main" ]
 
 env:
   RUSTFLAGS: "-Dwarnings"
@@ -18,5 +24,7 @@ jobs:
             libcairo2-dev \
             libfontconfig1-dev \
             libfreetype6-dev
-      - name: Run Clippy
-        run: cargo clippy --all-features
+      - name: Run Clippy All Features
+        run: cargo clippy --all-features --locked
+      - name: Run Clippy Default Features
+        run: cargo clippy --locked

@@ -3,6 +3,8 @@ name: Rust
 on:
   push:
     branches: [ "main" ]
+    tags-ignore:
+      - 'v*'
   pull_request:
     branches: [ "main" ]
 
@@ -42,7 +44,7 @@ jobs:
             libfontconfig1-dev \
             libfreetype6-dev
       - name: Build and Test
-        run: cargo llvm-cov nextest --lcov --output-path lcov.info --profile ci --all-features --all-targets
+        run: cargo llvm-cov nextest --lcov --output-path lcov.info --profile ci --all-features --all-targets --locked
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v6
