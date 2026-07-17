@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 const PATH_TO_OUTS: &str = "outs/per_sample_outs";
 const PATH_TO_COUNT_H5: &str = "count/sample_filtered_feature_bc_matrix.h5";
 const PATH_TO_COUNT_MEX: &str = "count/sample_filtered_feature_bc_matrix";
+const PATH_TO_COUNT_MEX_TAR: &str = "count/sample_filtered_feature_bc_matrix.tar.gz";
 const PATH_TO_VDJ_ANN: &str = "vdj_t/filtered_contig_annotations.csv";
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -315,6 +316,11 @@ fn copy_outputs_for_pipestance(
                     }
                 }
             } else {
+                let src = sample_dir.join(PATH_TO_COUNT_MEX_TAR);
+                if src.is_file() {
+                    let dst = dest.join(format!("{sample_name}.tar.gz"));
+                    copy_file_counting(&src, &dst, &mut stats.mex_files_copied);
+                }
                 // Source MEX missing; remove created empty dir only if new
                 cleanup_mex_dir_if_new(&mut stats, &dst_dir, dst_dir_newly_created);
             }
