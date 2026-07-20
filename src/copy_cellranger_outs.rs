@@ -200,10 +200,10 @@ pub(crate) fn check_pipestances(base_path: &Path) -> io::Result<usize> {
                 println!("{}: OK", dir_path.display());
             }
             Ok(false) => {
-                println!("{}: MISSING .mri.tgz", dir_path.display());
+                eprintln!("{}: MISSING .mri.tgz", dir_path.display());
             }
             Err(e) => {
-                println!("{}: ERROR reading directory: {}", dir_path.display(), e);
+                eprintln!("{}: ERROR reading directory: {}", dir_path.display(), e);
             }
         }
     }
@@ -351,89 +351,113 @@ fn cleanup_mex_dir_if_new(stats: &mut CopyStats, dst_dir: &PathBuf, dst_dir_newl
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::fs;
-    use tempfile::tempdir;
+    use tempfile::{TempDir, tempdir};
 
-    #[rstest]
-    fn copies_h5_when_present() {
-        let tmp = tempdir().unwrap();
-        let base = tmp.path().join("base");
-        let dest = tmp.path().join("dest");
+    #[fixture]
+    fn temp_dir() -> TempDir {
+        tempdir().unwrap()
+    }
 
-        let sample = base.join("p1/outs/per_sample_outs/S1/count");
-        fs::create_dir_all(&sample).unwrap();
-        fs::write(sample.join("sample_filtered_feature_bc_matrix.h5"), b"abc").unwrap();
+    fn sample_dir(temp_dir: TempDir, write_mex: bool) -> (PathBuf, PathBuf, PathBuf, TempDir) {
+        let base = temp_dir.path().join("base");
+        let dest = temp_dir.path().join("dest");
+        let sample = Path::new("p1/outs/per_sample_outs/S1");
+        let sample = base.join(sample);
+        let count_dir = sample.join("count");
 
-        let stats = copy_cellranger_outs_main(
-            &base,
-            Some(&dest.clone()),
-            &PipestanceResults {
-                h5: true,
-                mex: false,
-                vdj: false,
-            },
-            false,
+        let mex_src = count_dir.join("sample_filtered_feature_bc_matrix");
+        let vdj_dir = sample.join("vdj_t");
+        fs::create_dir_all(&count_dir).unwrap();
+
+        fs::create_dir_all(&vdj_dir).unwrap();
+        fs::create_dir_all(&dest).unwrap();
+
+        fs::write(
+            count_dir.join("sample_filtered_feature_bc_matrix.h5"),
+            b"abc",
         )
         .unwrap();
 
-        let out = dest.join("S1.h5");
-        assert!(out.is_file());
-        assert_eq!(fs::read(out).unwrap(), b"abc");
-        assert_eq!(stats.pipestances_seen, 1);
-        assert_eq!(stats.samples_seen, 1);
-        assert_eq!(stats.h5_copied, 1);
+        fs::write(vdj_dir.join("filtered_contig_annotations.csv"), b"contigs").unwrap();
+
+        if write_mex {
+            fs::create_dir_all(&mex_src).unwrap();
+            fs::write(mex_src.join("barcodes.tsv.gz"), b"barcodes").unwrap();
+            fs::write(mex_src.join("features.tsv.gz"), b"features").unwrap();
+            fs::write(mex_src.join("matrix.mtx.gz"), b"matrix").unwrap();
+            // Nested file should NOT be copied (non-recursive copy behavior)
+            let nested = mex_src.join("nested");
+            fs::create_dir_all(&nested).unwrap();
+            fs::write(nested.join("ignored.txt"), b"ignore me").unwrap();
+        }
+
+        (sample, base, dest, temp_dir)
     }
-    #[rstest]
-    fn copies_mex_non_recursively_and_counts_stats() {
-        let tmp = tempdir().unwrap();
-        let base = tmp.path().join("base");
-        let dest = tmp.path().join("dest");
 
-        // Build sample MEX tree
-        let mex_src =
-            base.join("p1/outs/per_sample_outs/S1/count/sample_filtered_feature_bc_matrix");
-        fs::create_dir_all(&mex_src).unwrap();
-        fs::write(mex_src.join("barcodes.tsv.gz"), b"barcodes").unwrap();
-        fs::write(mex_src.join("features.tsv.gz"), b"features").unwrap();
-        fs::write(mex_src.join("matrix.mtx.gz"), b"matrix").unwrap();
+    #[fixture]
+    fn sample_dir_mex(temp_dir: TempDir) -> (PathBuf, PathBuf, PathBuf, TempDir) {
+        sample_dir(temp_dir, true)
+    }
 
-        // Nested file should NOT be copied (non-recursive copy behavior)
-        let nested = mex_src.join("nested");
-        fs::create_dir_all(&nested).unwrap();
-        fs::write(nested.join("ignored.txt"), b"ignore me").unwrap();
-
-        let stats = copy_cellranger_outs_main(
-            &base,
-            Some(&dest.clone()),
-            &PipestanceResults {
-                h5: false,
-                mex: true,
-                vdj: false,
-            },
-            false,
-        )
-        .unwrap();
-        let dst_dir = dest.join("S1");
-        assert!(dst_dir.is_dir());
-        assert!(dst_dir.join("barcodes.tsv.gz").is_file());
-        assert!(dst_dir.join("features.tsv.gz").is_file());
-        assert!(dst_dir.join("matrix.mtx.gz").is_file());
-        assert!(!dst_dir.join("ignored.txt").exists());
-        assert!(!dst_dir.join("nested").exists());
-
-        assert_eq!(stats.pipestances_seen, 1);
-        assert_eq!(stats.samples_seen, 1);
-        assert_eq!(stats.mex_dirs_created, 1);
-        assert_eq!(stats.mex_files_copied, 3);
-        assert_eq!(stats.mex_dirs_cleaned_up, 0);
+    #[fixture]
+    fn sample_dir_no_mex(temp_dir: TempDir) -> (PathBuf, PathBuf, PathBuf, TempDir) {
+        sample_dir(temp_dir, false)
     }
 
     #[rstest]
-    fn cleans_up_new_mex_dest_dir_when_source_missing() {
-        let tmp = tempdir().unwrap();
-        let base = tmp.path().join("base");
-        let dest = tmp.path().join("dest");
+    #[case(PipestanceResults{ h5: true, mex: false, vdj: false })]
+    #[case(PipestanceResults{ h5: false, mex: true, vdj: false })]
+    #[case(PipestanceResults{ h5: false, mex: false, vdj: true })]
+    #[case(PipestanceResults{ h5: true, mex: true, vdj: true })]
+    #[should_panic(expected = "Nothing to do: specify at least one of --h5, --mex, --vdj")]
+    #[case(PipestanceResults{ h5: false, mex: false, vdj: false })]
+    fn copies_output(
+        #[from(sample_dir_mex)] sample_dir: (PathBuf, PathBuf, PathBuf, TempDir),
+        #[case] pipestance_results: PipestanceResults,
+    ) {
+        let (_sample, base, dest, _temp_dir) = sample_dir;
+        let stats =
+            copy_cellranger_outs_main(base.as_path(), Some(&dest), &pipestance_results, false)
+                .unwrap();
+
+        assert_eq!(stats.pipestances_seen, 1);
+        assert_eq!(stats.samples_seen, 1);
+
+        if pipestance_results.h5 {
+            let out = dest.join("S1.h5");
+            assert!(out.exists());
+            assert!(out.is_file());
+            assert_eq!(fs::read(out).unwrap(), b"abc");
+        }
+
+        if pipestance_results.mex {
+            let dst_dir = dest.join("S1");
+            assert!(dst_dir.is_dir());
+            assert!(dst_dir.join("barcodes.tsv.gz").is_file());
+            assert!(dst_dir.join("features.tsv.gz").is_file());
+            assert!(dst_dir.join("matrix.mtx.gz").is_file());
+            assert!(!dst_dir.join("ignored.txt").exists());
+            assert!(!dst_dir.join("nested").exists());
+
+            assert_eq!(stats.mex_dirs_created, 1);
+            assert_eq!(stats.mex_files_copied, 3);
+            assert_eq!(stats.mex_dirs_cleaned_up, 0);
+        }
+        if pipestance_results.vdj {
+            let out = dest.join("S1.csv");
+            assert!(out.is_file());
+            assert_eq!(fs::read(out).unwrap(), b"contigs");
+
+            assert_eq!(stats.vdj_copied, 1);
+        }
+    }
+
+    #[rstest]
+    fn copies_output_no_mex(temp_dir: TempDir) {
+        let base = temp_dir.path().join("base");
+        let dest = temp_dir.path().join("dest");
 
         // Sample exists, but MEX source dir is intentionally missing
         let sample_root = base.join("p1/outs/per_sample_outs/S1");
@@ -463,41 +487,9 @@ mod tests {
     }
 
     #[rstest]
-    fn copies_vdj_when_present_and_counts_stats() {
-        let tmp = tempdir().unwrap();
-        let base = tmp.path().join("base");
-        let dest = tmp.path().join("dest");
-
-        let vdj_dir = base.join("p1/outs/per_sample_outs/S1/vdj_t");
-        fs::create_dir_all(&vdj_dir).unwrap();
-        fs::write(vdj_dir.join("filtered_contig_annotations.csv"), b"contigs").unwrap();
-
-        let stats = copy_cellranger_outs_main(
-            &base,
-            Some(&dest.clone()),
-            &PipestanceResults {
-                h5: false,
-                mex: false,
-                vdj: true,
-            },
-            false,
-        )
-        .unwrap();
-
-        let out = dest.join("S1.csv");
-        assert!(out.is_file());
-        assert_eq!(fs::read(out).unwrap(), b"contigs");
-
-        assert_eq!(stats.pipestances_seen, 1);
-        assert_eq!(stats.samples_seen, 1);
-        assert_eq!(stats.vdj_copied, 1);
-    }
-
-    #[rstest]
-    fn does_not_remove_preexisting_mex_dest_dir_when_source_missing() {
-        let tmp = tempdir().unwrap();
-        let base = tmp.path().join("base");
-        let dest = tmp.path().join("dest");
+    fn does_not_remove_preexisting_mex_dest_dir_when_source_missing(temp_dir: TempDir) {
+        let base = temp_dir.path().join("base");
+        let dest = temp_dir.path().join("dest");
 
         let sample_root = base.join("p1/outs/per_sample_outs/S1");
         fs::create_dir_all(&sample_root).unwrap();
@@ -523,5 +515,28 @@ mod tests {
 
         assert_eq!(stats.mex_dirs_created, 0);
         assert_eq!(stats.mex_dirs_cleaned_up, 0);
+    }
+    #[rstest]
+    fn test_mri_tgz(temp_dir: TempDir) {
+        let base = temp_dir.path().join("base");
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join("test.mri.tgz"), b"").expect("Failed to write test.mri.tgz");
+        assert!(has_mri_tgz(&base).is_ok())
+    }
+    #[rstest]
+    fn test_handle_command(temp_dir: TempDir) {
+        let base = temp_dir.path().join("base");
+        let dest = temp_dir.path().join("dest");
+        let cmd = Commands::CopyCellRangerOuts {
+            base_path: base,
+            dest: Some(dest),
+            pipestance_results: PipestanceResults {
+                h5: false,
+                mex: true,
+                vdj: false,
+            },
+            check: false,
+        };
+        handle_command(cmd);
     }
 }
