@@ -4,9 +4,9 @@ use crate::geo_submission::{Progress, build_reports, make_progress_bar};
 use indicatif::ProgressBar;
 use regex::Regex;
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::{fs, io};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
@@ -206,13 +206,13 @@ pub(super) fn match_fastq(
     parallel_md5: &bool,
     jobs: &usize,
     progress: Option<Progress>,
-) {
+) -> Result<(), Box<dyn std::error::Error>> {
     let progress = progress.unwrap_or(Progress::Progress);
 
     match scan_fastq_directories(input_directories, parallel_md5, jobs, progress) {
         Ok(fastq_files) => {
             if fastq_files.is_empty() {
-                eprintln!(
+                let err_msg = format!(
                     "No FastQ files found in directories: {}",
                     input_directories
                         .iter()
@@ -220,7 +220,7 @@ pub(super) fn match_fastq(
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
-                return;
+                return Err(io::Error::new(io::ErrorKind::NotFound, err_msg.as_str()).into());
             }
 
             println!(
@@ -236,25 +236,21 @@ pub(super) fn match_fastq(
             // Group by (sample, lane)
             let lane_groups = group_by_lane(&fastq_files);
             let paired_report = generate_paired_report(&lane_groups);
-            if let Err(e) = build_reports::write_output(&paired_report, paired_output) {
-                eprintln!("Error writing paired output: {e}");
-            }
+            build_reports::write_output(&paired_report, paired_output)?;
 
             // Group by sample only
             let sample_groups = group_by_sample(&fastq_files);
             let sample_report = generate_sample_report(&sample_groups);
-            if let Err(e) = build_reports::write_output(&sample_report, sample_output) {
-                eprintln!("Error writing sample output: {e}");
-            }
+            build_reports::write_output(&sample_report, sample_output)?;
 
             // MD5 manifest
             let md5_report = build_reports::generate_md5_report(&fastq_files);
-            if let Err(e) = build_reports::write_output(&md5_report, md5_output) {
-                eprintln!("Error writing MD5 output: {e}");
-            }
+            build_reports::write_output(&md5_report, md5_output)?;
+            Ok(())
         }
         Err(e) => {
             eprintln!("Error scanning directory: {e}");
+            Err(e)
         }
     }
 }

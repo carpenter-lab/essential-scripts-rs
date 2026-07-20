@@ -6,7 +6,7 @@ mod traits;
 #[cfg(test)]
 mod test;
 
-use clap::{Args, Subcommand};
+use clap::{Args, Error, Subcommand};
 use clap_binary_enum::YesNoArg;
 use fastq::*;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
@@ -97,7 +97,12 @@ fn process_cores_with_available(
 }
 
 fn process_cores(requested_cores: Option<i32>) -> Result<usize, String> {
-    process_cores_with_available(num_cpus::get(), requested_cores)
+    let cores = process_cores_with_available(num_cpus::get(), requested_cores)?;
+    if cores == 0 {
+        Err(TOO_MANY_CORES_SUBTRACTED_ERROR.to_string())
+    } else {
+        Ok(cores)
+    }
 }
 
 fn subtract_from_available_cores(available_cores: usize, requested: i32) -> Result<usize, String> {
