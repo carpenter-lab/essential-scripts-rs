@@ -2,6 +2,7 @@ use essential_scripts_rs::io::{WriteToCsvOrStdout, read_from_file};
 use polars::prelude::*;
 use pretty_assertions::assert_eq;
 use rstest::rstest;
+use rstest_reuse::{self, *};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -44,48 +45,52 @@ fn read_from_file_with_sep(#[case] sep: Option<u8>, #[case] text: &str, #[case] 
     assert_eq!(df.get_column_names()[1].as_str(), "b");
 }
 
-#[test]
-fn write_to_flat_or_stdout_separator_override_beats_extension() {
-    let out = unique_path(Some("tsv")); // extension says TSV
-    let df = df![
-        "a" => &[1],
-        "b" => &[2]
-    ]
-    .expect("failed to build dataframe");
-
-    // Explicit CSV separator should override .tsv extension.
-    df.write_to_flat_or_stdout(out.clone(), Some(b','));
-
-    let written = fs::read_to_string(&out).expect("failed to read output file");
-    fs::remove_file(out).ok();
-
-    assert!(written.contains("1,2"), "expected csv row, got: {written}");
-}
-
-#[test]
-fn write_to_flat_or_stdout_uses_extension_when_separator_none() {
-    let out = unique_path(Some("tsv"));
-    let df = df![
-        "a" => &[1],
-        "b" => &[2]
-    ]
-    .expect("failed to build dataframe");
-
-    df.write_to_flat_or_stdout(out.clone(), None);
-
-    let written = fs::read_to_string(&out).expect("failed to read output file");
-    fs::remove_file(out).ok();
-
-    assert!(written.contains("1\t2"), "expected tsv row, got: {written}");
-}
-
-#[test]
+#[template]
+#[rstest]
+#[case(Some("tsv"), Some(b','), "1,2")]
+#[case(Some("csv"), Some(b','), "1,2")]
+#[case(Some("tsv"), Some(b'\t'), "1\t2")]
+#[case(Some("tsv"), None, "1\t2")]
 #[should_panic(expected = "Unsupported separator")]
-fn write_to_flat_or_stdout_unsupported_separator_panics() {
-    let out = unique_path(Some("csv"));
-    let df = df!["a" => &[1]].expect("failed to build dataframe");
+#[case(Some("csv"), Some(b';'), "1;2")]
+fn write_to_file_template(
+    #[case] path_ext: Option<&str>,
+    #[case] file_sep: Option<u8>,
+    #[case] exp: &str,
+) {
+}
 
-    df.write_to_flat_or_stdout(out, Some(b';'));
+#[apply(write_to_file_template)]
+fn write_to_flat(#[case] path_ext: Option<&str>, #[case] file_sep: Option<u8>, #[case] exp: &str) {
+    let out = unique_path(path_ext);
+    let df = df![
+        "a" => &[1],
+        "b" => &[2]
+    ]
+    .expect("failed to build dataframe");
+
+    df.write_to_flat_or_stdout(out.clone(), file_sep);
+    let written = fs::read_to_string(&out).expect("failed to read output file");
+    assert!(written.contains(exp), "expected row {exp}, got: {written}");
+}
+
+#[apply(write_to_file_template)]
+fn write_to_flat_lazy(
+    #[case] path_ext: Option<&str>,
+    #[case] file_sep: Option<u8>,
+    #[case] exp: &str,
+) {
+    let out = unique_path(path_ext);
+    let df = df![
+        "a" => &[1],
+        "b" => &[2]
+    ]
+    .expect("failed to build dataframe")
+    .lazy();
+
+    df.write_to_flat_or_stdout(out.clone(), file_sep);
+    let written = fs::read_to_string(&out).expect("failed to read output file");
+    assert!(written.contains(exp), "expected row {exp}, got: {written}");
 }
 
 #[test]
