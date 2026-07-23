@@ -1,6 +1,6 @@
 use crate::io;
 use crate::io::WriteToCsvOrStdout;
-use clap::Subcommand;
+use clap::{Error, Subcommand};
 use polars::prelude::*;
 use std::path::PathBuf;
 
@@ -152,7 +152,7 @@ pub(crate) fn aggregate_cellranger_tcr_output(
     processed.write_to_csv_or_stdout(output_file);
 }
 
-pub fn handle_command(cmd: Commands) {
+pub fn handle_command(cmd: Commands) -> Result<(), Error> {
     match cmd {
         Commands::AggregateCellRangerTCR {
             input_files,
@@ -162,6 +162,7 @@ pub fn handle_command(cmd: Commands) {
             aggregate_cellranger_tcr_output(input_files, output_file, keep_alpha);
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

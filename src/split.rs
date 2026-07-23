@@ -1,6 +1,6 @@
 use crate::io;
 use crate::io::WriteToCsvOrStdout;
-use clap::Subcommand;
+use clap::{Error, Subcommand};
 use polars::prelude::*;
 use std::path::PathBuf;
 
@@ -196,7 +196,7 @@ pub(crate) fn split_sample_id(input_file: PathBuf, output_file: PathBuf, column_
         .write_to_flat_or_stdout(output_file, None);
 }
 
-pub fn handle_command(cmd: Commands) {
+pub fn handle_command(cmd: Commands) -> Result<(), Error> {
     match cmd {
         Commands::SplitSampleId {
             input_file,
@@ -213,6 +213,7 @@ pub fn handle_command(cmd: Commands) {
             split_cdr3_seq_main(input_file, output_file, group.as_ref());
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

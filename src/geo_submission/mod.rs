@@ -115,7 +115,7 @@ fn subtract_from_available_cores(available_cores: usize, requested: i32) -> Resu
     }
 }
 
-pub fn handle_command(cmd: &Commands) {
+pub fn handle_command(cmd: &Commands) -> Result<(), Error> {
     match cmd {
         Commands::GeoFastq {
             input_directories,
@@ -136,7 +136,14 @@ pub fn handle_command(cmd: &Commands) {
                 &generate_args.parallel_md5,
                 &jobs,
                 generate_args.progress.get(),
-            );
+            )
+            .map_err(|e| {
+                Error::raw(
+                    clap::error::ErrorKind::Io,
+                    format!("Error matching FastQ files: {}", e),
+                )
+            })?;
+            Ok(())
         }
     }
 }

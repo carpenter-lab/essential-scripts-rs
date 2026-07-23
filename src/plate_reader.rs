@@ -1,7 +1,7 @@
 use crate::io;
 use crate::io::WriteToCsvOrStdout;
 use calamine::{Reader, Xlsx, open_workbook};
-use clap::Subcommand;
+use clap::{Error, Subcommand};
 use polars::prelude::*;
 use std::path::{Path, PathBuf};
 
@@ -415,7 +415,7 @@ fn run(
     out.select(&new_names)
 }
 
-fn reformat_plate_reader_data(input_file: &PathBuf, output_dir: &Path) -> PolarsResult<()> {
+fn reformat_plate_reader_data(input_file: &PathBuf, output_dir: &Path) -> Result<(), PolarsError> {
     let workbook: Xlsx<_> = open_workbook(input_file)
         .map_err(|e| PolarsError::ComputeError(format!("Failed to open Excel file: {e}").into()))?;
     let sheets = workbook.sheet_names().clone();
@@ -430,15 +430,21 @@ fn reformat_plate_reader_data(input_file: &PathBuf, output_dir: &Path) -> Polars
     Ok(())
 }
 
-pub fn handle_command(cmd: Commands) {
+pub fn handle_command(cmd: Commands) -> Result<(), Error> {
     match cmd {
         Commands::ReformatPlateReaderData {
             input_file,
             output_path,
         } => {
-            reformat_plate_reader_data(&input_file, &output_path).unwrap();
+            reformat_plate_reader_data(&input_file, &output_path).map_err(|e| {
+                Error::raw(
+                    clap::error::ErrorKind::Io,
+                    format!("Failed to reformat plate reader data: {e}"),
+                )
+            })?;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
