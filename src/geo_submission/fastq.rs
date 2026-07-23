@@ -104,7 +104,7 @@ fn generate_paired_report(groups: &BTreeMap<(String, String, String), Vec<&Fastq
         }
 
         if !r1_path.is_empty() {
-            output.push_str(&format!("{}", r1_path));
+            output.push_str(r1_path.as_str());
         }
         if !r2_path.is_empty() {
             output.push_str(&format!("\t{}", r2_path));

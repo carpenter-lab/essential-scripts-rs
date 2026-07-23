@@ -6,7 +6,7 @@ mod traits;
 #[cfg(test)]
 mod test;
 
-use clap::{Args, Error, Subcommand};
+use clap::{Args, Subcommand};
 use clap_binary_enum::YesNoArg;
 use fastq::*;
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
