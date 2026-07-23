@@ -9,31 +9,21 @@ use clap::{Error, Subcommand};
 use std::path::PathBuf;
 
 #[cfg(not(feature = "tcr"))]
+const CMD_ABOUT: &str = "Score a GLIPH2 output file with a TCR alignment pipeline. Requires re-installing with --features tcr";
+#[cfg(feature = "tcr")]
+const CMD_ABOUT: &str = "Score a GLIPH2 output file with a TCR alignment pipeline";
+
 #[derive(Subcommand)]
 pub enum Commands {
-    #[command(about = "Score a GLIPH2 output file with a TCR alignment pipeline")]
+    #[command(
+        about = CMD_ABOUT,
+    )]
     ScoreTCRAlignments {
         #[arg(help = "Input CSV file to process")]
         input_file: Option<PathBuf>,
 
         #[arg(help = "Output file path")]
         output_file: Option<PathBuf>,
-
-        #[arg(short, long, default_value_t = 1000)]
-        replicates: usize,
-    },
-}
-
-#[cfg(feature = "tcr")]
-#[derive(Subcommand)]
-pub enum Commands {
-    #[command(about = "Score a GLIPH2 output file with a TCR alignment pipeline")]
-    ScoreTCRAlignments {
-        #[arg(required = true, help = "Input CSV file to process")]
-        input_file: PathBuf,
-
-        #[arg(required = true, help = "Output file path")]
-        output_file: PathBuf,
 
         #[arg(short, long, default_value_t = 1000)]
         replicates: usize,
