@@ -6,7 +6,13 @@ use std::path::PathBuf;
 
 #[derive(Subcommand)]
 pub enum Commands {
-    #[command(about = "Aggregate CellRanger TCR output from multiple samples")]
+    /// Aggregate CellRanger TCR output from multiple samples
+    ///
+    /// Parse a set of input files with the Cell Ranger TCR format (`filtered_contig_annotations.csv`) and aggregate them into a single output file.
+    /// The output will contain one row per unique combination of sample, barcode, and TCR chain, with the corresponding CDR3 sequences and gene segments.
+    /// Optionally, the alpha chain can be retained in the output.
+    /// The internal `sample_id` column is used, so there is no need for unique filenames if running on direct outputs from Cell Ranger
+    #[command(about, long_about)]
     AggregateCellRangerTCR {
         #[arg(required = true, num_args = 1.., help = "Input CSV files to process")]
         input_files: Vec<PathBuf>,
