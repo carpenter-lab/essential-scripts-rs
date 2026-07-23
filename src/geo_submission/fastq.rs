@@ -13,6 +13,7 @@ use walkdir::WalkDir;
 pub(super) struct FastqFile {
     path: PathBuf,
     sample_id: String,
+    sample_number: String,
     lane: String,
     read_number: String,
     md5: String,
@@ -48,12 +49,13 @@ impl FromPathWithMd5 for FastqFile {
             .file_name()
             .and_then(|s| s.to_str())
             .ok_or("bad filename")?;
-        let (sample_id, lane, read_number) =
+        let (sample_id, sample_number, lane, read_number) =
             parse_fastq_filename(filename).ok_or("unparsable FastQ name")?;
         let md5 = crate::geo_submission::md5::compute_md5_with_progress(&path, pb)?;
         Ok(FastqFile {
             path,
             sample_id,
+            sample_number,
             lane,
             read_number,
             md5,
@@ -63,23 +65,24 @@ impl FromPathWithMd5 for FastqFile {
 
 /// Parse bcl2fastq filename format: {sample_id}_S{sample_number}_{lane}_{read}_001.fastq.gz
 /// Where read can be I1, I2, R1, or R2
-fn parse_fastq_filename(filename: &str) -> Option<(String, String, String)> {
-    let re = Regex::new(r"^(.+?)_S\d+_(L\d{3})_([IR][12])_001\.fastq(?:\.gz)?$").ok()?;
+fn parse_fastq_filename(filename: &str) -> Option<(String, String, String, String)> {
+    let re = Regex::new(r"^(.+?)_S(\d+)_(L\d{3})_([IR][12])_001\.fastq(?:\.gz)?$").ok()?;
     let caps = re.captures(filename)?;
     Some((
         caps[1].to_string(),
         caps[2].to_string(),
         caps[3].to_string(),
+        caps[4].to_string(),
     ))
 }
 
 /// Generate paired files report (`sample_lane` -> R1, R2 pairs)
-fn generate_paired_report(groups: &BTreeMap<(String, String), Vec<&FastqFile>>) -> String {
+fn generate_paired_report(groups: &BTreeMap<(String, String, String), Vec<&FastqFile>>) -> String {
     let mut output = String::new();
     output.push_str("# Paired FastQ Files by Sample and Lane\n");
     output.push_str("# Format: sample_lane: R1=/path/to/R1.fastq.gz, R2=/path/to/R2.fastq.gz\n\n");
 
-    for ((_sample_id, _lane), files) in groups {
+    for ((_sample_id, _sample_number, _lane), files) in groups {
         //output.push_str(&format!("{}_{}", sample_id, lane));
 
         let mut r1_path = String::new();
@@ -101,7 +104,7 @@ fn generate_paired_report(groups: &BTreeMap<(String, String), Vec<&FastqFile>>) 
         }
 
         if !r1_path.is_empty() {
-            output.push_str(&format!("\t{}", r1_path));
+            output.push_str(&format!("{}", r1_path));
         }
         if !r2_path.is_empty() {
             output.push_str(&format!("\t{}", r2_path));
@@ -118,11 +121,15 @@ fn generate_paired_report(groups: &BTreeMap<(String, String), Vec<&FastqFile>>) 
     output
 }
 
-/// Group files by (`sample_id`, `lane`)
-fn group_by_lane(files: &[FastqFile]) -> BTreeMap<(String, String), Vec<&FastqFile>> {
+/// Group files by (`sample_id`, `sample_number`, `lane`)
+fn group_by_lane(files: &[FastqFile]) -> BTreeMap<(String, String, String), Vec<&FastqFile>> {
     let mut groups = BTreeMap::new();
     for file in files {
-        let key = (file.sample_id.clone(), file.lane.clone());
+        let key = (
+            file.sample_id.clone(),
+            file.sample_number.clone(),
+            file.lane.clone(),
+        );
         groups.entry(key).or_insert_with(Vec::new).push(file);
     }
     groups
@@ -176,6 +183,7 @@ fn scan_fastq_directories(
     fastq_files.sort_by(|a, b| {
         a.sample_id
             .cmp(&b.sample_id)
+            .then_with(|| a.sample_number.cmp(&b.sample_number))
             .then_with(|| a.lane.cmp(&b.lane))
             .then_with(|| a.read_number.cmp(&b.read_number))
     });
@@ -262,24 +270,24 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case::with_gz("sample01_S1_L001_R1_001.fastq.gz", Some(("sample01".to_string(), "L001".to_string(), "R1".to_string())
+    #[case::with_gz("sample01_S1_L001_R1_001.fastq.gz", Some(("sample01".to_string(), "1".to_string(), "L001".to_string(), "R1".to_string())
     ))]
-    #[case::without_gz("sample01_S1_L001_R1_001.fastq", Some(("sample01".to_string(), "L001".to_string(), "R1".to_string())
+    #[case::without_gz("sample01_S1_L001_R1_001.fastq", Some(("sample01".to_string(),"1".to_string(), "L001".to_string(), "R1".to_string())
     ))]
-    #[case::with_underscore_in_sample("sample_01_with_underscores_S2_L002_R1_001.fastq", Some(("sample_01_with_underscores".to_string(), "L002".to_string(), "R1".to_string())
+    #[case::with_underscore_in_sample("sample_01_with_underscores_S2_L002_R1_001.fastq", Some(("sample_01_with_underscores".to_string(), "2".to_string(), "L002".to_string(), "R1".to_string())
     ))]
-    #[case::index_i1("sample01_S1_L001_I1_001.fastq", Some(("sample01".to_string(), "L001".to_string(), "I1".to_string())
+    #[case::index_i1("sample01_S1_L001_I1_001.fastq", Some(("sample01".to_string(), "1".to_string(), "L001".to_string(), "I1".to_string())
     ))]
-    #[case::index_i2("sample01_S1_L001_I2_001.fastq", Some(("sample01".to_string(), "L001".to_string(), "I2".to_string())
+    #[case::index_i2("sample01_S1_L001_I2_001.fastq", Some(("sample01".to_string(), "1".to_string(), "L001".to_string(), "I2".to_string())
     ))]
-    #[case::read_r2("sample01_S1_L001_R2_001.fastq", Some(("sample01".to_string(), "L001".to_string(), "R2".to_string())
+    #[case::read_r2("sample01_S1_L001_R2_001.fastq", Some(("sample01".to_string(), "1".to_string(), "L001".to_string(), "R2".to_string())
     ))]
-    #[case::read_r1("sample01_S1_L001_R1_001.fastq", Some(("sample01".to_string(), "L001".to_string(), "R1".to_string())
+    #[case::read_r1("sample01_S1_L001_R1_001.fastq", Some(("sample01".to_string(), "1".to_string(), "L001".to_string(), "R1".to_string())
     ))]
     #[case::invalid_filename("invalid_filename.fastq.gz", None)]
     fn test_parse_fastq_filename(
         #[case] filename: &str,
-        #[case] exp: Option<(String, String, String)>,
+        #[case] exp: Option<(String, String, String, String)>,
     ) {
         let result = parse_fastq_filename(filename);
         assert_eq!(result, exp);
@@ -290,6 +298,7 @@ mod tests {
             FastqFile {
                 path: PathBuf::from("/path/file1.fastq.gz"),
                 sample_id: "sample01".to_string(),
+                sample_number: "1".to_string(),
                 lane: "L001".to_string(),
                 read_number: "R1".to_string(),
                 md5: "abc123".to_string(),
@@ -297,6 +306,7 @@ mod tests {
             FastqFile {
                 path: PathBuf::from("/path/file2.fastq.gz"),
                 sample_id: "sample01".to_string(),
+                sample_number: "1".to_string(),
                 lane: "L001".to_string(),
                 read_number: "R2".to_string(),
                 md5: "def456".to_string(),
@@ -304,6 +314,7 @@ mod tests {
             FastqFile {
                 path: PathBuf::from("/path/file3.fastq.gz"),
                 sample_id: "sample01".to_string(),
+                sample_number: "1".to_string(),
                 lane: "L002".to_string(),
                 read_number: "R1".to_string(),
                 md5: "ghi789".to_string(),
@@ -312,8 +323,16 @@ mod tests {
 
         let groups = group_by_lane(&files);
         assert_eq!(groups.len(), 2);
-        assert!(groups.contains_key(&("sample01".to_string(), "L001".to_string())));
-        assert!(groups.contains_key(&("sample01".to_string(), "L002".to_string())));
+        assert!(groups.contains_key(&(
+            "sample01".to_string(),
+            "1".to_string(),
+            "L001".to_string()
+        )));
+        assert!(groups.contains_key(&(
+            "sample01".to_string(),
+            "1".to_string(),
+            "L002".to_string()
+        )));
     }
 
     #[test]
@@ -322,6 +341,7 @@ mod tests {
             FastqFile {
                 path: PathBuf::from("/path/file1.fastq.gz"),
                 sample_id: "sample01".to_string(),
+                sample_number: "1".to_string(),
                 lane: "L001".to_string(),
                 read_number: "R1".to_string(),
                 md5: "abc123".to_string(),
@@ -329,6 +349,7 @@ mod tests {
             FastqFile {
                 path: PathBuf::from("/path/file2.fastq.gz"),
                 sample_id: "sample02".to_string(),
+                sample_number: "2".to_string(),
                 lane: "L001".to_string(),
                 read_number: "R1".to_string(),
                 md5: "def456".to_string(),
