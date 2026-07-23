@@ -20,6 +20,8 @@ fn base_command_works(#[case] arg: &str) {
 #[case::reformat_plate_reader_data("reformat-plate-reader-data")]
 #[case::copy_cell_ranger_outs("copy-cell-ranger-outs")]
 #[case::score_tcr_alignments("score-tcr-alignments")]
+#[case::geo_fastq("geo-fastq")]
+#[case::run_enrichr("run-enrichr")]
 fn subcommand_help_works(#[case] arg: &str) {
     cargo_bin_cmd!("essential-scripts-rs")
         .args([arg, "--help"])
@@ -29,6 +31,24 @@ fn subcommand_help_works(#[case] arg: &str) {
         .args(["help", arg])
         .assert()
         .success();
+}
+
+#[rstest]
+#[cfg(not(feature = "tcr"))]
+#[case::score_tcr_alignments("score-tcr-alignments")]
+#[cfg(not(feature = "enrichment"))]
+#[case::run_enrichr("run-enrichr")]
+fn subcommand_help_prints_installation_help(#[case] arg: &str) {
+    let output = cargo_bin_cmd!("essential-scripts-rs")
+        .args([arg, "--help"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+    assert!(stdout.contains("Requires re-installing with --features"));
 }
 
 #[test]
@@ -63,6 +83,17 @@ fn copy_cellranger_outs_check_mode_runs() {
     fs::create_dir_all(&pipestance).unwrap();
 
     // check mode only needs a directory tree to scan
+    cargo_bin_cmd!("essential-scripts-rs")
+        .args([
+            "copy-cell-ranger-outs",
+            "--base-path",
+            base.to_str().unwrap(),
+            "--check",
+        ])
+        .assert()
+        .failure();
+
+    fs::write(pipestance.join("p1.mri.tgz"), "some content").expect("Failed to create p1.mri.tgz");
     cargo_bin_cmd!("essential-scripts-rs")
         .args([
             "copy-cell-ranger-outs",

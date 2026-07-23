@@ -450,6 +450,22 @@ mod tests {
         assert!(matches!(schema, GeneSchema::CtGene));
     }
 
+    #[rstest]
+    #[should_panic(
+        expected = "CTgene schema should be valid: ComputeError(ErrString(\"Missing required gene columns. Provide either CTgeneA/CTgeneB or TRAV/TRAJ/TRBV/TRBJ\"))"
+    )]
+    fn resolve_gene_schema_rejects_invalid_ctgene_columns() {
+        let df = df!(
+            "CDR3a" => ["A"],
+            "CDR3b" => ["B"],
+            "CTgeneA" => ["X;Y"],
+        )
+        .expect("failed to create test dataframe");
+
+        let schema = resolve_gene_schema(&df).expect("CTgene schema should be valid");
+        assert!(matches!(schema, GeneSchema::CtGene));
+    }
+
     #[test]
     fn resolve_gene_schema_rejects_partial_tr_columns() {
         let df = df!(
