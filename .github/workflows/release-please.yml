@@ -20,3 +20,22 @@ jobs:
           # `MY_RELEASE_PLEASE_TOKEN` (this secret name is not important).
           token: ${{ secrets.GH_TOKEN }}
           release-type: rust
+      - name: Tag Latest Release as Stable
+        if: ${{ steps.release-please.outputs.release_created }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add gh-token "https://${{ secrets.GH_TOKEN }}@github.com/${{ github.repository }}.git"
+          git tag -d stable || true
+          git push origin :stable || true
+          git tag -a stable -m "Tag latest release as stable"
+          git push origin stable
+  build-docs:
+    runs-on: ubuntu-latest
+    if: ${{ jobs.release-please.outputs.release_created }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build Minimal
+        run: cargo build --no-default-features
+      - name: Build Docs
+        run: cargo run --no-default-features -- --markdown-help

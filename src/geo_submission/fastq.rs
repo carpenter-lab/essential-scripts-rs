@@ -1,6 +1,7 @@
 use crate::geo_submission::build_reports::prepare_paths_report;
+use crate::geo_submission::helper::make_progress_bar;
 use crate::geo_submission::traits::*;
-use crate::geo_submission::{Progress, build_reports, make_progress_bar};
+use crate::geo_submission::{Progress, build_reports};
 use indicatif::ProgressBar;
 use regex::Regex;
 use std::collections::BTreeMap;

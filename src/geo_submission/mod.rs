@@ -1,18 +1,24 @@
+#[cfg(feature = "base_cmd")]
 mod build_reports;
+#[cfg(feature = "base_cmd")]
 mod fastq;
+#[cfg(feature = "base_cmd")]
+mod helper;
+#[cfg(feature = "base_cmd")]
 mod md5;
+#[cfg(feature = "base_cmd")]
 mod traits;
 
 #[cfg(test)]
 mod test;
 
+use clap::builder::RangedI64ValueParser;
 use clap::{Args, Error, Subcommand};
 use clap_binary_enum::YesNoArg;
+#[cfg(feature = "base_cmd")]
 use fastq::*;
-use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use num_cpus;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, YesNoArg)]
 pub enum Progress {
@@ -22,16 +28,34 @@ pub enum Progress {
     NoProgress,
 }
 
+#[cfg(feature = "base_cmd")]
+fn thread_parser() -> RangedI64ValueParser<i32> {
+    clap::value_parser!(i32).range(1 + -1 * num_cpus::get() as i64..=num_cpus::get() as i64)
+}
+#[cfg(feature = "base_cmd")]
+fn thread_default() -> i32 {
+    num_cpus::get().try_into().unwrap()
+}
+
+#[cfg(not(feature = "base_cmd"))]
+fn thread_default() -> i32 {
+    0
+}
+#[cfg(not(feature = "base_cmd"))]
+fn thread_parser() -> RangedI64ValueParser<i32> {
+    clap::value_parser!(i32).range(1..-1)
+}
+
 #[derive(Args, Debug)]
 pub struct RunArgs {
     #[arg(long, help = "Compute MD5s in parallel", default_value_t = false)]
     parallel_md5: bool,
 
     #[arg(
-            long,
-            value_parser = clap::value_parser!(i32).range(1 + -1 * num_cpus::get() as i64..=num_cpus::get() as i64),
-            default_value_t = num_cpus::get().try_into().unwrap(),
-            help = "Number of threads to use for parallel MD5"
+        long,
+        value_parser = thread_parser(),
+        default_value_t = thread_default(),
+        help = "Number of threads to use for parallel MD5. 0 = all available cores"
     )]
     threads: i32,
 
@@ -66,55 +90,7 @@ pub enum Commands {
     },
 }
 
-fn make_progress_bar(
-    total_bytes: u64,
-    progress: Progress,
-) -> Result<Arc<ProgressBar>, Box<dyn std::error::Error>> {
-    let pb = ProgressBar::new(total_bytes);
-    pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) - {msg}",
-        )?
-            .progress_chars("=> "),
-    );
-    if let Progress::NoProgress = progress {
-        pb.set_draw_target(ProgressDrawTarget::hidden());
-    }
-    Ok(Arc::from(pb))
-}
-
-const TOO_MANY_CORES_SUBTRACTED_ERROR: &str = "cannot subtract more cores than available";
-
-fn process_cores_with_available(
-    available_cores: usize,
-    requested_cores: Option<i32>,
-) -> Result<usize, String> {
-    match requested_cores {
-        None | Some(0) => Ok(available_cores),
-        Some(requested) if requested > 0 => Ok(requested as usize),
-        Some(requested) => subtract_from_available_cores(available_cores, requested),
-    }
-}
-
-fn process_cores(requested_cores: Option<i32>) -> Result<usize, String> {
-    let cores = process_cores_with_available(num_cpus::get(), requested_cores)?;
-    if cores == 0 {
-        Err(TOO_MANY_CORES_SUBTRACTED_ERROR.to_string())
-    } else {
-        Ok(cores)
-    }
-}
-
-fn subtract_from_available_cores(available_cores: usize, requested: i32) -> Result<usize, String> {
-    let cores_to_subtract = requested.unsigned_abs() as usize;
-
-    if cores_to_subtract > available_cores {
-        Err(TOO_MANY_CORES_SUBTRACTED_ERROR.to_string())
-    } else {
-        Ok(available_cores - cores_to_subtract)
-    }
-}
-
+#[cfg(feature = "base_cmd")]
 pub fn handle_command(cmd: &Commands) -> Result<(), Error> {
     match cmd {
         Commands::GeoFastq {
@@ -124,7 +100,7 @@ pub fn handle_command(cmd: &Commands) -> Result<(), Error> {
             md5_output,
             generate_args,
         } => {
-            let jobs = process_cores(Some(generate_args.threads)).unwrap_or_else(|e| {
+            let jobs = helper::process_cores(Some(generate_args.threads)).unwrap_or_else(|e| {
                 eprintln!("Could not set number of threads: {e}");
                 std::process::exit(1);
             });

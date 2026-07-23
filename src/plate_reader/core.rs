@@ -1,24 +1,11 @@
 use crate::io;
 use crate::io::WriteToCsvOrStdout;
 use calamine::{Reader, Xlsx, open_workbook};
-use clap::{Error, Subcommand};
+use polars::datatypes::{AnyValue, DataType, PlSmallStr, UInt32Chunked};
+use polars::error::{PolarsError, PolarsResult};
+use polars::frame::DataFrame;
 use polars::prelude::*;
 use std::path::{Path, PathBuf};
-
-#[derive(Subcommand)]
-#[command(about = "Reformat plate reader data into useful format")]
-pub enum Commands {
-    ReformatPlateReaderData {
-        #[arg(required = true, help = "Input Excel file to process")]
-        input_file: PathBuf,
-
-        #[arg(
-            required = true,
-            help = "Output directory path. Will create one CSV per sheet."
-        )]
-        output_path: PathBuf,
-    },
-}
 
 const LETTERS: [char; 8] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
@@ -415,7 +402,10 @@ fn run(
     out.select(&new_names)
 }
 
-fn reformat_plate_reader_data(input_file: &PathBuf, output_dir: &Path) -> Result<(), PolarsError> {
+pub fn reformat_plate_reader_data(
+    input_file: &PathBuf,
+    output_dir: &Path,
+) -> Result<(), PolarsError> {
     let workbook: Xlsx<_> = open_workbook(input_file)
         .map_err(|e| PolarsError::ComputeError(format!("Failed to open Excel file: {e}").into()))?;
     let sheets = workbook.sheet_names().clone();
@@ -427,23 +417,6 @@ fn reformat_plate_reader_data(input_file: &PathBuf, output_dir: &Path) -> Result
         df.write_to_csv_or_stdout(output_file);
     }
 
-    Ok(())
-}
-
-pub fn handle_command(cmd: Commands) -> Result<(), Error> {
-    match cmd {
-        Commands::ReformatPlateReaderData {
-            input_file,
-            output_path,
-        } => {
-            reformat_plate_reader_data(&input_file, &output_path).map_err(|e| {
-                Error::raw(
-                    clap::error::ErrorKind::Io,
-                    format!("Failed to reformat plate reader data: {e}"),
-                )
-            })?;
-        }
-    }
     Ok(())
 }
 
