@@ -17,6 +17,7 @@ use clap::{Args, Error, Subcommand};
 use clap_binary_enum::YesNoArg;
 #[cfg(feature = "base_cmd")]
 use fastq::*;
+#[cfg(feature = "base_cmd")]
 use num_cpus;
 use std::path::PathBuf;
 
@@ -30,7 +31,7 @@ pub enum Progress {
 
 #[cfg(feature = "base_cmd")]
 fn thread_parser() -> RangedI64ValueParser<i32> {
-    clap::value_parser!(i32).range(1 + -1 * num_cpus::get() as i64..=num_cpus::get() as i64)
+    clap::value_parser!(i32).range(1 + -(num_cpus::get() as i64)..=num_cpus::get() as i64)
 }
 #[cfg(feature = "base_cmd")]
 fn thread_default() -> i32 {
@@ -43,7 +44,7 @@ fn thread_default() -> i32 {
 }
 #[cfg(not(feature = "base_cmd"))]
 fn thread_parser() -> RangedI64ValueParser<i32> {
-    clap::value_parser!(i32).range(1..-1)
+    clap::value_parser!(i32).range(-1..1)
 }
 
 #[derive(Args, Debug)]
@@ -104,7 +105,7 @@ pub fn handle_command(cmd: &Commands) -> Result<(), Error> {
                 eprintln!("Could not set number of threads: {e}");
                 std::process::exit(1);
             });
-            match_fastq(
+            let _ = match_fastq(
                 input_directories,
                 Option::from(paired_output),
                 Option::from(sample_output),
