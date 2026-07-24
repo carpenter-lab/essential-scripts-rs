@@ -247,4 +247,30 @@ mod tests {
         assert!(cols.contains("TcRb_alignment_score"));
         assert!(cols.contains("TcRa_alignment_score_v_background"));
     }
+
+    #[test]
+    fn run_returns_err_when_pattern_column_missing() {
+        let df = df![
+            "TcRa" => [Some("A;B"), Some("C")],
+            "TcRb" => [Some("X;Y"), Some("Z")],
+        ]
+        .unwrap();
+
+        let err = df.run(1).expect_err("expected missing pattern to error");
+        let msg = err.to_string().to_lowercase();
+        assert!(msg.contains("unable to find column \"pattern\""));
+    }
+
+    #[test]
+    fn score_df_returns_err_when_required_columns_missing() {
+        let df = df![
+            "pattern" => ["p1", "p2"],
+            "TcRb" => [Some("X;Y"), Some("Z")],
+        ]
+        .unwrap();
+
+        let err = score_df(&df, 1).expect_err("expected missing TcRa to error");
+        let msg = err.to_string().to_lowercase();
+        assert!(msg.contains("unable to find column \"tcra\""));
+    }
 }

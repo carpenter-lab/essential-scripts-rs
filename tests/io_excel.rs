@@ -1,4 +1,4 @@
-use essential_scripts_rs::io::read_excel;
+use essential_scripts_rs::io::{read_excel, read_from_file};
 use std::path::PathBuf;
 
 fn fixture(path: &str) -> PathBuf {
@@ -8,7 +8,9 @@ fn fixture(path: &str) -> PathBuf {
 #[test]
 fn read_excel_default_sheet_succeeds() {
     let path = fixture("test/plate_reader_data_expected.xlsx");
-    let df = read_excel(&path, None, 0, None).expect("expected default-sheet read to succeed");
+    let df = read_from_file(path, None)
+        .collect()
+        .expect("expected default-sheet read to succeed");
 
     assert!(df.width() > 0, "expected at least one column");
     assert!(df.height() > 0, "expected at least one row");

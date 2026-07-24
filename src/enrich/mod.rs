@@ -6,7 +6,14 @@ mod core;
 use clap::{Error, Subcommand, ValueEnum};
 use std::fmt;
 use std::path::PathBuf;
+#[cfg(feature = "base_cmd")]
 use tokio;
+
+#[cfg(not(feature = "enrichment"))]
+const CMD_ABOUT: &str =
+    "Run Enrichr via API interface. Requires re-installing with --features enrichment";
+#[cfg(feature = "enrichment")]
+const CMD_ABOUT: &str = "Run Enrichr via API interface.";
 
 #[derive(Clone, ValueEnum, Debug)]
 pub enum Library {
@@ -40,7 +47,7 @@ fn must_be_none(pb: Option<&PathBuf>) -> Result<Option<PathBuf>, String> {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    #[command(about = "Run Enrichr via API interface.")]
+    #[command(about = CMD_ABOUT)]
     RunEnrichr {
         #[arg(short, long, help = "Enrichr Library to use")]
         library: Library,
@@ -68,6 +75,7 @@ pub enum Commands {
     },
 }
 
+#[cfg(feature = "base_cmd")]
 #[tokio::main]
 pub async fn handle_command(cmd: Commands) -> Result<(), Error> {
     #[cfg(feature = "enrichment")]

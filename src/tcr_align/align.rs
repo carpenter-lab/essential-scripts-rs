@@ -193,12 +193,12 @@ mod tests {
     const GAP_EXTEND: i32 = 1;
 
     #[fixture]
-    fn protien_align_fixture() -> Aligner {
+    fn protein_aligner() -> Aligner {
         build_protein_aligner(GAP_OPEN, GAP_EXTEND).expect("aligner build")
     }
 
     #[rstest]
-    fn empty_input_returns_err(#[from(protien_align_fixture)] aligner: Aligner) {
+    fn empty_input_returns_err(#[from(protein_aligner)] aligner: Aligner) {
         let res = run_parasail(&aligner, &[] as &[&str], None);
         assert!(res.is_err(), "expected error for empty input");
         match res {
@@ -212,89 +212,72 @@ mod tests {
     }
 
     #[rstest]
-    fn empty_reference_produces_nan(#[from(protien_align_fixture)] aligner: Aligner) {
-        let a = ["A", "C"];
-        let res = run_parasail(&aligner, &a, Some(&[] as &[&str])).expect("call ok");
-        assert!(res.is_nan());
-    }
-
-    #[rstest]
-    fn single_sequence_no_reference_produces_nan(#[from(protien_align_fixture)] aligner: Aligner) {
-        let a = ["ACDEF"];
-        let res = run_parasail(&aligner, &a, None).expect("call ok");
-        assert!(res.is_nan());
-    }
-
-    #[rstest]
-    fn reference_pairing_mean_matches_manual_sum(#[from(protien_align_fixture)] aligner: Aligner) {
-        let a = ["ACD", "WQ"];
-        let b = ["ACD", "WQ", "MN"];
-
-        let mean = run_parasail(&aligner, &a, Some(&b)).expect("call ok");
-
-        // Manual calculation
-        let mut sum: i64 = 0;
-        let mut n: i64 = 0;
-        for q in a.iter() {
-            for r in b.iter() {
-                let result = aligner
-                    .align(Some(q.as_bytes()), r.as_bytes())
-                    .expect("align ok");
-                sum += result.get_score() as i64;
-                n += 1;
-            }
-        }
-        let expected = if n == 0 {
-            f64::NAN
-        } else {
-            (sum as f64) / (n as f64)
-        };
-        if expected.is_nan() {
-            assert!(mean.is_nan());
-        } else {
-            assert!(
-                (mean - expected).abs() < 1e-9,
-                "mean {} != expected {}",
-                mean,
-                expected
-            );
-        }
-    }
-
-    #[rstest]
-    fn no_reference_pairing_mean_matches_manual_sum(
-        #[from(protien_align_fixture)] aligner: Aligner,
+    #[case::empty_reference(vec!["A", "C"], Some(vec![]))]
+    #[case::single_query_no_reference(vec!["ACDEF"], None)]
+    fn no_valid_pairings_produce_nan(
+        #[from(protein_aligner)] aligner: Aligner,
+        #[case] query: Vec<&str>,
+        #[case] reference: Option<Vec<&str>>,
     ) {
-        let a = ["ACD", "WQ", "MN"];
+        let reference = reference.as_deref();
+        let res = run_parasail(&aligner, &query, reference).expect("call ok");
+        assert!(res.is_nan());
+    }
 
-        let mean = run_parasail(&aligner, &a, None).expect("call ok");
-
+    fn manual_mean(aligner: &Aligner, a: &[&str], b: Option<&[&str]>) -> f64 {
         let mut sum: i64 = 0;
         let mut n: i64 = 0;
-        for i in 0..a.len() {
-            for j in (i + 1)..a.len() {
-                let result = aligner
-                    .align(Some(a[i].as_bytes()), a[j].as_bytes())
-                    .expect("align ok");
-                sum += result.get_score() as i64;
-                n += 1;
+
+        if let Some(reference) = b {
+            for q in a {
+                for r in reference {
+                    let result = aligner
+                        .align(Some(q.as_bytes()), r.as_bytes())
+                        .expect("align ok");
+                    sum += i64::from(result.get_score());
+                    n += 1;
+                }
+            }
+        } else {
+            for i in 0..a.len() {
+                for r in a.iter().skip(i + 1) {
+                    let result = aligner
+                        .align(Some(a[i].as_bytes()), r.as_bytes())
+                        .expect("align ok");
+                    sum += i64::from(result.get_score());
+                    n += 1;
+                }
             }
         }
-        let expected = if n == 0 {
+
+        if n == 0 {
             f64::NAN
         } else {
             (sum as f64) / (n as f64)
-        };
-        if expected.is_nan() {
-            assert!(mean.is_nan());
-        } else {
-            assert!(
-                (mean - expected).abs() < 1e-9,
-                "mean {} != expected {}",
-                mean,
-                expected
-            );
         }
+    }
+
+    #[rstest]
+    #[case::with_reference(
+        vec!["ACD", "WQ"],
+        Some(vec!["ACD", "WQ", "MN"])
+    )]
+    #[case::within_query_only(vec!["ACD", "WQ", "MN"], None)]
+    fn mean_matches_manual_calculation(
+        #[from(protein_aligner)] aligner: Aligner,
+        #[case] query: Vec<&str>,
+        #[case] reference: Option<Vec<&str>>,
+    ) {
+        let reference = reference.as_deref();
+        let mean = run_parasail(&aligner, &query, reference).expect("call ok");
+        let expected = manual_mean(&aligner, &query, reference);
+
+        assert!(
+            (mean - expected).abs() < 1e-9,
+            "mean {} != expected {}",
+            mean,
+            expected
+        );
     }
 
     // Test helper to set the BLOSUM62 OnceLock to a failure. This is only available in tests.

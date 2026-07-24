@@ -1,4 +1,8 @@
 use super::*;
+use crate::geo_submission::helper::{
+    TOO_MANY_CORES_SUBTRACTED_ERROR, make_progress_bar, process_cores_with_available,
+    subtract_from_available_cores,
+};
 use pretty_assertions::assert_eq;
 use rstest::{fixture, rstest};
 

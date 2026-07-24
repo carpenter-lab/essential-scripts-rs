@@ -1,31 +1,9 @@
 use crate::io;
 use crate::io::WriteToCsvOrStdout;
-use clap::Subcommand;
 use polars::prelude::*;
 use std::path::PathBuf;
 
-#[derive(Subcommand)]
-pub enum Commands {
-    #[command(about = "Aggregate CellRanger TCR output from multiple samples")]
-    AggregateCellRangerTCR {
-        #[arg(required = true, num_args = 1.., help = "Input CSV files to process")]
-        input_files: Vec<PathBuf>,
-
-        #[arg(help = "Output file path")]
-        output_file: PathBuf,
-
-        #[arg(
-            short,
-            long,
-            action = clap::ArgAction::SetTrue,
-            default_value_t = false,
-            help = "Keep alpha chain in output [default: false]"
-        )]
-        keep_alpha: bool,
-    },
-}
-
-fn process_input_lazy(df: LazyFrame, keep_alpha: bool) -> LazyFrame {
+pub fn process_input_lazy(df: LazyFrame, keep_alpha: bool) -> LazyFrame {
     let df2 = df
         .group_by(["sample", "barcode", "chain"])
         .agg([
@@ -150,18 +128,6 @@ pub(crate) fn aggregate_cellranger_tcr_output(
         .filter(col("CDR3b").neq(lit("")));
 
     processed.write_to_csv_or_stdout(output_file);
-}
-
-pub fn handle_command(cmd: Commands) {
-    match cmd {
-        Commands::AggregateCellRangerTCR {
-            input_files,
-            output_file,
-            keep_alpha,
-        } => {
-            aggregate_cellranger_tcr_output(input_files, output_file, keep_alpha);
-        }
-    }
 }
 
 #[cfg(test)]
