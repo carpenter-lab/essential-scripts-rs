@@ -105,7 +105,7 @@ pub fn handle_command(cmd: &Commands) -> Result<(), Error> {
                 eprintln!("Could not set number of threads: {e}");
                 std::process::exit(1);
             });
-            let _ = match_fastq(
+            match_fastq(
                 input_directories,
                 Option::from(paired_output),
                 Option::from(sample_output),

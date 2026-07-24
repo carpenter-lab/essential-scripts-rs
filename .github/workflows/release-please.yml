@@ -30,12 +30,11 @@ jobs:
           git push origin :stable || true
           git tag -a stable -m "Tag latest release as stable"
           git push origin stable
-  build-docs:
-    runs-on: ubuntu-latest
-    if: ${{ jobs.release-please.outputs.release_created }}
-    steps:
       - uses: actions/checkout@v6
+        if: ${{ steps.release-please.outputs.release_created }}
       - name: Build Minimal
+        if: ${{ steps.release-please.outputs.release_created }}
         run: cargo build --no-default-features
       - name: Build Docs
+        if: ${{ steps.release-please.outputs.release_created }}
         run: cargo run --no-default-features -- --markdown-help
