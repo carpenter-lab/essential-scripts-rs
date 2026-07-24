@@ -412,6 +412,7 @@ mod tests {
             FastqFile {
                 path: PathBuf::from("/tmp/sample01_S1_L001_R1_001.fastq.gz"),
                 sample_id: "sample01".to_string(),
+                sample_number: "1".to_string(),
                 lane: "L001".to_string(),
                 read_number: "R1".to_string(),
                 md5: "a".to_string(),
@@ -419,6 +420,7 @@ mod tests {
             FastqFile {
                 path: PathBuf::from("/tmp/sample01_S1_L001_R2_001.fastq.gz"),
                 sample_id: "sample01".to_string(),
+                sample_number: "1".to_string(),
                 lane: "L001".to_string(),
                 read_number: "R2".to_string(),
                 md5: "b".to_string(),
@@ -426,6 +428,7 @@ mod tests {
             FastqFile {
                 path: PathBuf::from("/tmp/sample01_S1_L001_I1_001.fastq.gz"),
                 sample_id: "sample01".to_string(),
+                sample_number: "1".to_string(),
                 lane: "L001".to_string(),
                 read_number: "I1".to_string(),
                 md5: "c".to_string(),
@@ -433,6 +436,7 @@ mod tests {
             FastqFile {
                 path: PathBuf::from("/tmp/sample01_S1_L001_I2_001.fastq.gz"),
                 sample_id: "sample01".to_string(),
+                sample_number: "1".to_string(),
                 lane: "L001".to_string(),
                 read_number: "I2".to_string(),
                 md5: "d".to_string(),
@@ -440,6 +444,7 @@ mod tests {
             FastqFile {
                 path: PathBuf::from("/tmp/sample02_S1_L001_R1_001.fastq.gz"),
                 sample_id: "sample02".to_string(),
+                sample_number: "2".to_string(),
                 lane: "L001".to_string(),
                 read_number: "R1".to_string(),
                 md5: "e".to_string(),
@@ -450,8 +455,11 @@ mod tests {
         let report = generate_paired_report(&lane_groups);
         let lines: Vec<&str> = report.lines().collect();
 
-        assert!(lines.contains(&"\tsample01_S1_L001_R1_001.fastq.gz\tsample01_S1_L001_R2_001.fastq.gz\tsample01_S1_L001_I1_001.fastq.gz\tsample01_S1_L001_I2_001.fastq.gz"));
-        assert!(lines.contains(&"\tsample02_S1_L001_R1_001.fastq.gz"));
+        assert_eq!(
+            lines[3],
+            "sample01_S1_L001_R1_001.fastq.gz\tsample01_S1_L001_R2_001.fastq.gz\tsample01_S1_L001_I1_001.fastq.gz\tsample01_S1_L001_I2_001.fastq.gz"
+        );
+        assert_eq!(lines[4], "sample02_S1_L001_R1_001.fastq.gz");
     }
 
     #[test]
@@ -460,6 +468,7 @@ mod tests {
             FastqFile {
                 path: PathBuf::from("/tmp/sample01_S1_L001_R1_001.fastq.gz"),
                 sample_id: "sample01".to_string(),
+                sample_number: "1".to_string(),
                 lane: "L001".to_string(),
                 read_number: "R1".to_string(),
                 md5: "a".to_string(),
@@ -467,6 +476,7 @@ mod tests {
             FastqFile {
                 path: PathBuf::from("/tmp/sample01_S1_L001_R2_001.fastq.gz"),
                 sample_id: "sample01".to_string(),
+                sample_number: "1".to_string(),
                 lane: "L001".to_string(),
                 read_number: "R2".to_string(),
                 md5: "b".to_string(),
@@ -474,6 +484,7 @@ mod tests {
             FastqFile {
                 path: PathBuf::from("/tmp/sample02_S1_L001_R1_001.fastq.gz"),
                 sample_id: "sample02".to_string(),
+                sample_number: "2".to_string(),
                 lane: "L001".to_string(),
                 read_number: "R1".to_string(),
                 md5: "c".to_string(),
@@ -482,10 +493,12 @@ mod tests {
 
         let sample_groups = group_by_sample(&files);
         let report = generate_sample_report(&sample_groups);
-        assert!(report.contains(
+        let lines: Vec<&str> = report.lines().collect();
+        assert_eq!(
+            lines[3],
             "sample01\tsample01_S1_L001_R1_001.fastq.gz\tsample01_S1_L001_R2_001.fastq.gz"
-        ));
-        assert!(report.contains("sample02\tsample02_S1_L001_R1_001.fastq.gz"));
+        );
+        assert_eq!(lines[4], "sample02\tsample02_S1_L001_R1_001.fastq.gz");
     }
 
     #[test]
