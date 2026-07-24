@@ -59,4 +59,3 @@ rstest = "0.26"
 tempfile = "3.27"
 assert_cmd = "2.2"
 rstest_reuse = "0.7"
-
