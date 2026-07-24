@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/carpenter-lab/essential-scripts-rs/compare/v1.0.1...v1.0.2) (2026-07-24)
+
+
+### Bug Fixes
+
+* include sample number when parsing FastQ Files ([#40](https://github.com/carpenter-lab/essential-scripts-rs/issues/40)) ([a1908a8](https://github.com/carpenter-lab/essential-scripts-rs/commit/a1908a863d6aaf23bdece583c01ea25a3ec37665))
+
 ## [1.0.1](https://github.com/carpenter-lab/essential-scripts-rs/compare/v1.0.0...v1.0.1) (2026-07-17)
 
 
