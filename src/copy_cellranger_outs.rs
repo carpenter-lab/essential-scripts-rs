@@ -1,6 +1,7 @@
-use clap::{Args, Subcommand};
+use clap::{Args, Error, Subcommand};
 use std::fs;
 use std::io;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 const PATH_TO_OUTS: &str = "outs/per_sample_outs";
@@ -47,7 +48,12 @@ pub struct PipestanceResults {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    #[command(about = "Copy selected outputs from Cell Ranger pipestances")]
+    /// Copy selected outputs from Cell Ranger pipestances
+    ///
+    /// Scans through a directory searching for Cell Ranger Pipestances (subdirectories containing a `*.mri.tgz` marker file).
+    /// For each pipestance, copies selected outputs (H5, MEX, VDJ) into a destination directory.
+    /// Those files are renamed from their default (`sample_filtered_feature_bc_matrix.h5`) to `<sample>.h5` and stored as a flat directory.
+    #[command(about, long_about)]
     CopyCellRangerOuts {
         #[arg(
             short,
@@ -76,7 +82,7 @@ pub enum Commands {
     },
 }
 
-pub fn handle_command(cmd: Commands) {
+pub fn handle_command(cmd: Commands) -> Result<(), Error> {
     match cmd {
         Commands::CopyCellRangerOuts {
             base_path,
@@ -90,8 +96,9 @@ pub fn handle_command(cmd: Commands) {
                 &pipestance_results,
                 check,
             ) {
-                eprintln!("{e}");
+                return Err(e.into());
             }
+            Ok(())
         }
     }
 }
@@ -112,14 +119,14 @@ pub fn copy_cellranger_outs_main(
 
     if !h5 && !mex && !vdj {
         return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
+            ErrorKind::InvalidInput,
             "Nothing to do: specify at least one of --h5, --mex, --vdj",
         ));
     }
 
     let Some(dest) = dest else {
         return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
+            ErrorKind::InvalidInput,
             "Missing destination path",
         ));
     };
@@ -214,10 +221,7 @@ pub(crate) fn check_pipestances(base_path: &Path) -> io::Result<usize> {
         total - ok_count
     );
     if total == 0 {
-        Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            "No pipestances found",
-        ))
+        Err(io::Error::new(ErrorKind::NotFound, "No pipestances found"))
     } else if total != ok_count {
         Err(io::Error::other(format!(
             "Some pipestances failed validation: {} OK, {} missing",
@@ -291,7 +295,7 @@ fn copy_outputs_for_pipestance(
                     stats.mex_dirs_created += 1;
                     true
                 }
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => false,
+                Err(e) if e.kind() == ErrorKind::AlreadyExists => false,
                 Err(e) => {
                     eprintln!("Failed to create {}: {}", dst_dir.display(), e);
                     continue;
@@ -524,19 +528,20 @@ mod tests {
         assert!(has_mri_tgz(&base).is_ok())
     }
     #[rstest]
-    fn test_handle_command(temp_dir: TempDir) {
-        let base = temp_dir.path().join("base");
-        let dest = temp_dir.path().join("dest");
+    fn test_handle_command(
+        #[from(sample_dir_no_mex)] sample_dir: (PathBuf, PathBuf, PathBuf, TempDir),
+    ) {
+        let (_sample, base, dest, _temp_dir) = sample_dir;
         let cmd = Commands::CopyCellRangerOuts {
             base_path: base,
             dest: Some(dest),
             pipestance_results: PipestanceResults {
-                h5: false,
-                mex: true,
+                h5: true,
+                mex: false,
                 vdj: false,
             },
             check: false,
         };
-        handle_command(cmd);
+        handle_command(cmd).expect("Command failed");
     }
 }

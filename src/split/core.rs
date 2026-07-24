@@ -1,47 +1,9 @@
 use crate::io;
 use crate::io::WriteToCsvOrStdout;
-use clap::Subcommand;
+use polars::error::{PolarsError, PolarsResult};
+use polars::frame::DataFrame;
 use polars::prelude::*;
 use std::path::PathBuf;
-
-#[derive(Subcommand)]
-pub enum Commands {
-    #[command(about = "Split sample ID into subject and condition from GLIPH2 output")]
-    SplitSampleId {
-        #[arg(required = true, num_args = 1.., help = "Input CSV file to process")]
-        input_file: PathBuf,
-
-        #[arg(help = "Output file path")]
-        output_file: PathBuf,
-
-        #[arg(
-            short,
-            long,
-            default_value = "subject:condition",
-            help = "Column to split"
-        )]
-        column_name: String,
-    },
-    #[command(
-        about = "Split CDR3 sequences and genes if a semicolon is present",
-        after_help = "The TCR columns must be named CDR3a and CDR3b. Requires either CTgeneA/CTgeneB columns or TRAV/TRAJ/TRBV/TRBJ columns for the TCR genes. If group columns are not provided, each input row is treated as its own group and alpha/beta splits are anchored to original rows."
-    )]
-    SplitCdr3Seq {
-        #[arg(required = true, help = "Input CSV file to process")]
-        input_file: PathBuf,
-
-        #[arg(default_value = "-", help = "Output file path")]
-        output_file: PathBuf,
-
-        #[arg(
-            short,
-            long,
-            num_args = 1..,
-            help = "Optional columns to group by; if omitted, each input row is treated as its own group"
-        )]
-        group: Option<Vec<String>>,
-    },
-}
 
 #[derive(Clone, Copy)]
 enum GeneSchema {
@@ -194,25 +156,6 @@ pub(crate) fn split_sample_id(input_file: PathBuf, output_file: PathBuf, column_
     df.collect()
         .expect("Failed to collect dataframe")
         .write_to_flat_or_stdout(output_file, None);
-}
-
-pub fn handle_command(cmd: Commands) {
-    match cmd {
-        Commands::SplitSampleId {
-            input_file,
-            output_file,
-            column_name,
-        } => {
-            split_sample_id(input_file, output_file, &column_name);
-        }
-        Commands::SplitCdr3Seq {
-            input_file,
-            output_file,
-            group,
-        } => {
-            split_cdr3_seq_main(input_file, output_file, group.as_ref());
-        }
-    }
 }
 
 #[cfg(test)]
@@ -442,6 +385,22 @@ mod tests {
             "CDR3b" => ["B"],
             "CTgeneA" => ["X;Y"],
             "CTgeneB" => ["Z"]
+        )
+        .expect("failed to create test dataframe");
+
+        let schema = resolve_gene_schema(&df).expect("CTgene schema should be valid");
+        assert!(matches!(schema, GeneSchema::CtGene));
+    }
+
+    #[rstest]
+    #[should_panic(
+        expected = "CTgene schema should be valid: ComputeError(ErrString(\"Missing required gene columns. Provide either CTgeneA/CTgeneB or TRAV/TRAJ/TRBV/TRBJ\"))"
+    )]
+    fn resolve_gene_schema_rejects_invalid_ctgene_columns() {
+        let df = df!(
+            "CDR3a" => ["A"],
+            "CDR3b" => ["B"],
+            "CTgeneA" => ["X;Y"],
         )
         .expect("failed to create test dataframe");
 

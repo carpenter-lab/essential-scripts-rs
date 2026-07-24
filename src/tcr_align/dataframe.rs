@@ -638,6 +638,17 @@ mod tests {
     use rand::rngs::SmallRng;
     use std::collections::HashSet;
 
+    fn row_idx_for_pattern(df: &DataFrame, pattern: &str) -> usize {
+        df.column("pattern")
+            .unwrap()
+            .str()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .find_map(|(idx, v)| (v == Some(pattern)).then_some(idx))
+            .expect("pattern not found")
+    }
+
     #[test]
     fn test_all_unique_cdr3_alpha_basic() {
         let df = df![
@@ -706,5 +717,94 @@ mod tests {
         let mut rng2 = SmallRng::from_seed([1; 32]);
         let out2 = downsample_vec(small.clone(), "pat", &pb, &mut rng2);
         assert_eq!(out2, small);
+    }
+
+    #[test]
+    fn test_get_list_cell_trims_and_deduplicates() {
+        let df = df![
+            "pattern" => ["pat1", "pat1"],
+            "TcRa" => [Some(" A ;A; ;A "), Some("A")],
+            "TcRb" => [Some("X"), Some("X")],
+        ]
+        .unwrap();
+
+        let grouped = prepare_parasail_groups(&df).unwrap();
+        let values = get_list_cell_as_vec_utf8(&grouped, "TcRa", 0).unwrap();
+        assert_eq!(values, vec!["A"]);
+    }
+
+    #[test]
+    fn test_fraction_self_greater_marks_single_pattern_as_nan() {
+        let df = df![
+            "pattern" => ["single", "pat2"],
+            "TcRa" => [Some("ACD;WQ"), Some("ACD;MN")],
+            "TcRb" => [Some("MN;PQ"), Some("PQ;RS")],
+        ]
+        .unwrap();
+
+        let all_alpha = all_unique_cdr3_alpha(&df).unwrap();
+        let groups = prepare_parasail_groups(&df).unwrap();
+        let out = fraction_self_greater(&groups, &all_alpha, 2, 7, 1).unwrap();
+
+        assert_eq!(out.height(), 2);
+        let idx = row_idx_for_pattern(&out, "single");
+        let tcra_score = out
+            .column("TcRa_alignment_score")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(idx)
+            .unwrap();
+        let tcrb_score = out
+            .column("TcRb_alignment_score")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(idx)
+            .unwrap();
+        let frac = out
+            .column("TcRa_alignment_score_v_background")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(idx)
+            .unwrap();
+
+        assert!(tcra_score.is_nan());
+        assert!(tcrb_score.is_nan());
+        assert!(frac.is_nan());
+    }
+
+    #[test]
+    fn test_fraction_self_greater_uses_minus_one_when_alpha_self_is_nan() {
+        let df = df![
+            "pattern" => ["pat1", "pat2"],
+            "TcRa" => [Some("ACD"), Some("WQ;MN")],
+            "TcRb" => [Some("MN;PQ"), Some("PQ;RS")],
+        ]
+        .unwrap();
+
+        let all_alpha = all_unique_cdr3_alpha(&df).unwrap();
+        let groups = prepare_parasail_groups(&df).unwrap();
+        let out = fraction_self_greater(&groups, &all_alpha, 3, 7, 1).unwrap();
+
+        let idx = row_idx_for_pattern(&out, "pat1");
+        let tcra_score = out
+            .column("TcRa_alignment_score")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(idx)
+            .unwrap();
+        let frac = out
+            .column("TcRa_alignment_score_v_background")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(idx)
+            .unwrap();
+
+        assert!(tcra_score.is_nan());
+        assert_eq!(frac, -1.0);
     }
 }

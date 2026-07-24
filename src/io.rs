@@ -136,6 +136,7 @@ pub fn read_from_csv(input_file: PathBuf) -> LazyFrame {
 ///
 /// ```rust
 /// use std::path::PathBuf;
+/// use essential_scripts_rs::io::read_from_tsv;
 ///
 /// let input_file = PathBuf::from("data/example.tsv");
 /// let lazy_frame = read_from_tsv(input_file);
@@ -191,8 +192,9 @@ pub fn read_from_tsv(input_file: PathBuf) -> LazyFrame {
 /// - Panics if the Excel file reading fails.
 ///
 /// # Examples
-/// ```
+/// ```no_run
 /// use std::path::PathBuf;
+/// use essential_scripts_rs::io::read_from_file;
 ///
 /// // Example: Reading a file with a specified separator
 /// let input_path = PathBuf::from("data.csv");
@@ -267,7 +269,7 @@ pub fn strip_quotes(s: &str) -> String {
 /// ```rust
 /// # use polars::prelude::*;
 /// # use std::path::PathBuf;
-/// # use my_crate::read_excel;
+/// # use essential_scripts_rs::io::read_excel;
 ///
 /// let path = PathBuf::from("example.xlsx");
 /// let sheet_name = Some("Sheet1");

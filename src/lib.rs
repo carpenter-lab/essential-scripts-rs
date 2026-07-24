@@ -2,6 +2,7 @@ pub mod aggregate;
 pub mod copy_cellranger_outs;
 pub mod enrich;
 pub mod geo_submission;
+#[cfg(feature = "base_cmd")]
 pub mod io;
 pub mod plate_reader;
 pub mod split;

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/carpenter-lab/essential-scripts-rs/compare/v1.0.0...v1.0.1) (2026-07-17)
+
+
+### Bug Fixes
+
+* support copying the count matrix tar.gz file if the MarketMatrix is compressed ([27c790e](https://github.com/carpenter-lab/essential-scripts-rs/commit/27c790e6a36a1902c18930f7c0adcf19a0e25a08))
+
 ## [1.0.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v0.5.1...v1.0.0) (2026-07-16)
 
 
