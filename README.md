@@ -22,6 +22,9 @@ instructions [to install Rust](https://rust-lang.org/tools/install/).
 The package will be installed in `~/.cargo/bin` and will take between 5 and 15 minutes to
 compile.
 
+## Documentation
+The CLI documentation can be found in the docs directory [here](docs/cli.md).
+
 ## The Tools
 
 All tools have a `--help` option which explains how to use the tool.
