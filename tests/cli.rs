@@ -1,5 +1,6 @@
 use assert_cmd::cargo::cargo_bin_cmd;
 use rstest::rstest;
+use rstest_reuse::{apply, template};
 use std::fs;
 use tempfile::tempdir;
 
@@ -13,6 +14,7 @@ fn base_command_works(#[case] arg: &str) {
     cargo_bin_cmd!("essential-scripts-rs").arg(arg).unwrap();
 }
 
+#[template]
 #[rstest]
 #[case::aggregate_cell_ranger_tcr("aggregate-cell-ranger-tcr")]
 #[case::split_sample_id("split-sample-id")]
@@ -22,6 +24,9 @@ fn base_command_works(#[case] arg: &str) {
 #[case::score_tcr_alignments("score-tcr-alignments")]
 #[case::geo_fastq("geo-fastq")]
 #[case::run_enrichr("run-enrichr")]
+fn command_cases(#[case] arg: &str) {}
+
+#[apply(command_cases)]
 fn subcommand_help_works(#[case] arg: &str) {
     cargo_bin_cmd!("essential-scripts-rs")
         .args([arg, "--help"])
@@ -31,6 +36,14 @@ fn subcommand_help_works(#[case] arg: &str) {
         .args(["help", arg])
         .assert()
         .success();
+}
+
+#[apply(command_cases)]
+fn subcommand_fails_missing_input(#[case] arg: &str) {
+    cargo_bin_cmd!("essential-scripts-rs")
+        .args([arg])
+        .assert()
+        .failure();
 }
 
 #[rstest]
@@ -49,6 +62,22 @@ fn subcommand_help_prints_installation_help(#[case] arg: &str) {
 
     let stdout = String::from_utf8_lossy(&output);
     assert!(stdout.contains("Requires re-installing with --features"));
+}
+
+#[test]
+fn reformat_plate_reader_data_subcommand_fails_for_missing_input_file() {
+    let tmp = tempdir().unwrap();
+    let missing_input = tmp.path().join("missing.xlsx");
+    let output_dir = tmp.path().join("output");
+
+    cargo_bin_cmd!("essential-scripts-rs")
+        .args([
+            "reformat-plate-reader-data",
+            missing_input.to_str().unwrap(),
+            output_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
 }
 
 #[test]
