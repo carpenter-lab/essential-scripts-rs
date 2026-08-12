@@ -7,3 +7,6 @@ pub mod io;
 pub mod plate_reader;
 pub mod split;
 pub mod tcr_align;
+
+#[cfg(test)]
+pub mod test_helpers;
