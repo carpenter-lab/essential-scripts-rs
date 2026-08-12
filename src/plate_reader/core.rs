@@ -490,7 +490,7 @@ mod tests {
 
     #[test]
     fn test_run() {
-        let input_path = PathBuf::from("test/plate_reader_data.xlsx");
+        let input_path = PathBuf::from("tests/data/plate_reader_data.xlsx");
         let df = run(
             &input_path,
             "[Concentration]",
@@ -500,7 +500,7 @@ mod tests {
             23,
         );
         let expected = read_excel(
-            &PathBuf::from("test/plate_reader_data_expected.xlsx"),
+            &PathBuf::from("tests/data/plate_reader_data_expected.xlsx"),
             Some("1 to 2"),
             0,
             Some(true),
