@@ -120,3 +120,58 @@ pub async fn handle_command(cmd: Commands) -> Result<(), Error> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Library;
+    use pretty_assertions::assert_eq;
+    use rstest::*;
+
+    #[rstest]
+    #[case(Library::ReactomePathways2024, "Reactome_Pathways_2024")]
+    #[case(Library::Reactome, "Reactome_Pathways_2024")]
+    #[case(Library::BioCarta2016, "BioCarta_2016")]
+    #[case(Library::WikiPathways2024Human, "WikiPathways_2024_Human")]
+    #[case(Library::GOBiologicalProcess, "GO_Biological_Process_2026")]
+    fn test_library_to_string(#[case] library: Library, #[case] expected: &str) {
+        assert_eq!(library.to_string(), expected);
+    }
+
+    #[cfg(not(feature = "enrichment"))]
+    mod disabled_tests {
+        use super::super::*;
+
+        #[test]
+        #[should_panic(
+            expected = "This command requires the `enrichment` feature. Rebuild with `--features enrichment`"
+        )]
+        fn test_handle_command() {
+            let cmd = Commands::RunEnrichr {
+                library: Library::ReactomePathways2024,
+                gene_list: PathBuf::from("genes.txt"),
+                background: None,
+                output_file: PathBuf::from("output.txt"),
+                output_plot: vec![PathBuf::from("plot.png")],
+            };
+            let _ = handle_command(cmd).unwrap();
+        }
+    }
+
+    #[cfg(feature = "enrichment")]
+    mod enrichment_tests {
+        use super::super::*;
+        use pretty_assertions::assert_eq;
+        use rstest::*;
+        use std::path::PathBuf;
+
+        #[rstest]
+        #[case(None)]
+        #[should_panic(expected = "Background is not supported in the API")]
+        #[case(Some(&PathBuf::from("background.txt")))]
+        fn test_must_be_none(#[case] background: Option<&PathBuf>) {
+            let result = must_be_none(background).unwrap();
+
+            assert_eq!(result, None);
+        }
+    }
+}

@@ -1,9 +1,37 @@
-use crate::enrich::core::{Enrichment, EnrichrResult};
+use crate::enrich::core::EnrichrResult;
 use reqwest;
 use reqwest::multipart;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+
+pub trait EnrichrAPITrait: Send + Sync {
+    async fn send_genes(
+        &mut self,
+        gene_list: &[String],
+        libraries: &[String],
+        send_background: bool,
+    ) -> Result<(), APIFailure>;
+    async fn enrich(&mut self, library_name: &String) -> Result<EnrichrResult, APIFailure>;
+    fn get_short_id(&self) -> Option<String>;
+}
+
+impl EnrichrAPITrait for EnrichrAPI {
+    async fn send_genes(
+        &mut self,
+        gene_list: &[String],
+        libraries: &[String],
+        send_background: bool,
+    ) -> Result<(), APIFailure> {
+        self.send_genes(gene_list, libraries, send_background).await
+    }
+    async fn enrich(&mut self, library_name: &String) -> Result<EnrichrResult, APIFailure> {
+        self.enrich(library_name).await
+    }
+    fn get_short_id(&self) -> Option<String> {
+        self.get_short_id()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListResponse {
@@ -103,8 +131,8 @@ impl EnrichrAPI {
     const BACKGROUND_URL: &'static str = "addbackground";
     const BACKGROUND_ENRICH_URL: &'static str = "backgroundenrich";
 
-    pub fn new(enrichment: Enrichment) -> Self {
-        match enrichment.background {
+    pub fn new(background: Option<Vec<String>>) -> Self {
+        match background {
             Some(_background) => EnrichrAPI {
                 client: reqwest::Client::new(),
                 list_response: None,
