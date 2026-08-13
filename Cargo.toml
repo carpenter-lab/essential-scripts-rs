@@ -53,7 +53,7 @@ lto = "thin"
 opt-level = 3
 
 [dev-dependencies]
-polars-testing = "0.54"
+polars-testing = "0.55"
 pretty_assertions = "1.4"
 rstest = "0.26"
 tempfile = "3.27"
