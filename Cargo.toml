@@ -28,7 +28,7 @@ clap-binary-enum = "0.1"
 clap-markdown = "0.1"
 
 [dependencies.polars]
-version = "0.54"
+version = "0.55"
 features = ["lazy", "strings", "concat_str", "timezones", "dtype-array"]
 optional = true
 
