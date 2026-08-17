@@ -338,3 +338,27 @@ impl EnrichrAPI {
         // Ok(EnrichrResult::empty(library_name))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::without_short_id("Something went wrong", None, "API Failure: Something went wrong")]
+    #[case::with_short_id(
+        "Enrichment request failed",
+        Some("abc123"),
+        "API Failure: Enrichment request failed\nResults can be found at: https://maayanlab.cloud/Enrichr/enrich?dataset=abc123"
+    )]
+    fn test_api_failure_display(
+        #[case] message: &str,
+        #[case] short_id: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let short_id = short_id.map(String::from);
+        let failure = APIFailure::new(message.to_string(), short_id.as_ref());
+
+        assert_eq!(failure.to_string(), expected);
+    }
+}

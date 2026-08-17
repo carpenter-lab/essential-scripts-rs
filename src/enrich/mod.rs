@@ -142,9 +142,6 @@ mod tests {
         use super::super::*;
 
         #[test]
-        #[should_panic(
-            expected = "This command requires the `enrichment` feature. Rebuild with `--features enrichment`"
-        )]
         fn test_handle_command() {
             let cmd = Commands::RunEnrichr {
                 library: Library::ReactomePathways2024,
@@ -153,7 +150,13 @@ mod tests {
                 output_file: PathBuf::from("output.txt"),
                 output_plot: vec![PathBuf::from("plot.png")],
             };
-            let _ = handle_command(cmd).unwrap();
+            if let Err(e) = handle_command(cmd) {
+                assert_eq!(e.kind(), clap::ErrorKind::MissingSubcommand);
+                assert_eq!(
+                    e.to_string(),
+                    "This command requires the `enrichment` feature. Rebuild with `--features enrichment`"
+                );
+            }
         }
     }
 
@@ -172,6 +175,25 @@ mod tests {
             let result = must_be_none(background).unwrap();
 
             assert_eq!(result, None);
+        }
+
+        #[test]
+        fn handle_command_rejects_background_before_calling_enrichr() {
+            let cmd = Commands::RunEnrichr {
+                library: Library::ReactomePathways2024,
+                gene_list: PathBuf::from("genes.txt"),
+                background: Some(PathBuf::from("background.txt")),
+                output_file: PathBuf::from("output.txt"),
+                output_plot: vec![PathBuf::from("plot.png")],
+            };
+
+            let err = handle_command(cmd).expect_err("expected background validation error");
+
+            assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
+            assert!(
+                err.to_string()
+                    .contains("Background is not supported in the API")
+            );
         }
     }
 }
