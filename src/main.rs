@@ -59,30 +59,18 @@ macro_rules! exit_on_error_feature_subcommand {
 
 #[cfg(feature = "base_cmd")]
 pub(crate) fn main_helper(cli: Cli) {
-    match cli.command {
-        Some(Commands::Aggregate(cmd)) => {
-            exit_on_error_feature_subcommand!(Cli, aggregate::handle_command(cmd))
-        }
-        Some(Commands::Split(cmd)) => {
-            exit_on_error_feature_subcommand!(Cli, split::handle_command(cmd))
-        }
-        Some(Commands::ReformatPlateReaderData(cmd)) => {
-            exit_on_error_feature_subcommand!(Cli, plate_reader::handle_command(cmd))
-        }
-        Some(Commands::CopyCellRangerOuts(cmd)) => {
-            exit_on_error_feature_subcommand!(Cli, copy_cellranger_outs::handle_command(cmd))
-        }
-        Some(Commands::TcrAlign(cmd)) => {
-            exit_on_error_feature_subcommand!(Cli, tcr_align::handle_command(cmd))
-        }
-        Some(Commands::MatchFastq(cmd)) => {
-            exit_on_error_feature_subcommand!(Cli, geo_submission::handle_command(&cmd))
-        }
-        Some(Commands::RunEnrichr(cmd)) => {
-            exit_on_error_feature_subcommand!(Cli, enrich::handle_command(cmd))
-        }
-        None => {}
-    }
+    let result = match cli.command {
+        Some(Commands::Aggregate(cmd)) => aggregate::handle_command(cmd),
+        Some(Commands::Split(cmd)) => split::handle_command(cmd),
+        Some(Commands::ReformatPlateReaderData(cmd)) => plate_reader::handle_command(cmd),
+        Some(Commands::CopyCellRangerOuts(cmd)) => copy_cellranger_outs::handle_command(cmd),
+        Some(Commands::TcrAlign(cmd)) => tcr_align::handle_command(cmd),
+        Some(Commands::MatchFastq(cmd)) => geo_submission::handle_command(&cmd),
+        Some(Commands::RunEnrichr(cmd)) => enrich::handle_command(cmd),
+        None => Ok(()),
+    };
+
+    exit_on_error_feature_subcommand!(Cli, result);
 }
 
 #[cfg(not(feature = "base_cmd"))]
@@ -117,6 +105,7 @@ fn main() {
 mod tests {
     use super::*;
     use clap::Parser;
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn parses_no_command() {
