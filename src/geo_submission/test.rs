@@ -3,8 +3,10 @@ use crate::geo_submission::helper::{
     TOO_MANY_CORES_SUBTRACTED_ERROR, make_progress_bar, process_cores_with_available,
     subtract_from_available_cores,
 };
+use clap::builder::TypedValueParser;
 use pretty_assertions::assert_eq;
 use rstest::{fixture, rstest};
+use std::ffi::OsStr;
 
 #[rstest]
 #[case::progress_bar(Progress::Progress, 1000, 1000)]
@@ -66,4 +68,60 @@ fn test_subtract_too_many_cores_error_message() {
     let result = subtract_from_available_cores(4, -10);
     assert!(result.is_err());
     assert_eq!(result.unwrap_err(), TOO_MANY_CORES_SUBTRACTED_ERROR);
+}
+
+#[rstest]
+fn test_thread_default() {
+    assert_eq!(thread_default(), 4);
+}
+
+#[cfg(feature = "base_cmd")]
+#[rstest]
+#[case("1", 1)]
+#[case("4", 4)]
+#[case("-3", -3)]
+fn test_thread_parser_accepts_valid_values_base_cmd(#[case] raw: &str, #[case] expected: i32) {
+    let parser = thread_parser();
+    let value = parser
+        .parse_ref(&clap::Command::new("test"), None, OsStr::new(raw))
+        .expect("value should parse");
+    assert_eq!(value, expected);
+}
+
+#[cfg(feature = "base_cmd")]
+#[rstest]
+#[case("-4")]
+#[case("5")]
+fn test_thread_parser_rejects_invalid_values_base_cmd(#[case] raw: &str) {
+    let parser = thread_parser();
+    assert!(
+        parser
+            .parse_ref(&clap::Command::new("test"), None, OsStr::new(raw))
+            .is_err()
+    );
+}
+
+#[cfg(not(feature = "base_cmd"))]
+#[rstest]
+#[case("-1", -1)]
+#[case("0", 0)]
+fn test_thread_parser_accepts_valid_values_no_base_cmd(#[case] raw: &str, #[case] expected: i32) {
+    let parser = thread_parser();
+    let value = parser
+        .parse_ref(&clap::Command::new("test"), None, OsStr::new(raw))
+        .expect("value should parse");
+    assert_eq!(value, expected);
+}
+
+#[cfg(not(feature = "base_cmd"))]
+#[rstest]
+#[case("-2")]
+#[case("2")]
+fn test_thread_parser_rejects_invalid_values_no_base_cmd(#[case] raw: &str) {
+    let parser = thread_parser();
+    assert!(
+        parser
+            .parse_ref(&clap::Command::new("test"), None, OsStr::new(raw))
+            .is_err()
+    );
 }
