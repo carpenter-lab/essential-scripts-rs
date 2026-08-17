@@ -45,3 +45,39 @@ pub fn handle_command(cmd: Commands) -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[cfg(feature = "base_cmd")]
+mod tests {
+    use super::*;
+    use crate::test_helpers::{get_timestamp, write_text_file};
+    use temp_testdir::TempDir;
+
+    #[test]
+    fn test_handle_aggregate_cellranger_tcr_command() {
+        let temp_dir = TempDir::default();
+        let input_file = temp_dir
+            .with_file_name(get_timestamp())
+            .with_extension("csv");
+        let output_file = temp_dir
+            .with_file_name(get_timestamp())
+            .with_extension("tsv");
+
+        write_text_file(
+            &input_file,
+            "sample,barcode,chain,v_gene,d_gene,j_gene,cdr3\n\
+             sample1,barcode1,TRB,TRBV1,,TRBJ1,CASSIRSSYEQYF\n",
+        );
+
+        let cmd = Commands::AggregateCellRangerTCR {
+            input_files: vec![input_file],
+            output_file: output_file.clone(),
+            keep_alpha: false,
+        };
+
+        let result = handle_command(cmd);
+
+        assert!(result.is_ok());
+        assert!(output_file.exists());
+    }
+}
