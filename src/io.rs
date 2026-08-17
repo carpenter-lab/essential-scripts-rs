@@ -561,4 +561,13 @@ mod tests {
         assert!(df.width() > 0, "expected at least one column");
         assert!(df.height() > 0, "expected at least one row");
     }
+
+    #[rstest]
+    #[case::normal_file("tests/data/plate_reader_data_expected.xlsx")]
+    fn test_read_excel_from_generic(#[case] path: PathBuf) {
+        let df = read_from_file(path, None).collect().unwrap();
+
+        assert!(df.width() > 0, "expected at least one column");
+        assert!(df.height() > 0, "expected at least one row");
+    }
 }
