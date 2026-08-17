@@ -289,6 +289,10 @@ mod tests {
 
     #[test]
     fn test_blosum62_error_handling() {
+        assert!(
+            std::env::var_os("NEXTEST").is_some(),
+            "this test must be run with `cargo nextest run` because it relies on nextest's per-test process isolation"
+        );
         // Force the BLOSUM62 to an error state
         set_blosum62_to_err_for_test("test error").expect("set error");
 
