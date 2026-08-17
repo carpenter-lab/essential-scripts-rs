@@ -12,7 +12,7 @@ pub trait EnrichrAPITrait: Send + Sync {
         libraries: &[String],
         send_background: bool,
     ) -> Result<(), APIFailure>;
-    async fn enrich(&mut self, library_name: &String) -> Result<EnrichrResult, APIFailure>;
+    async fn enrich(&mut self, library_name: &str) -> Result<EnrichrResult, APIFailure>;
     fn get_short_id(&self) -> Option<String>;
 }
 
@@ -25,8 +25,9 @@ impl EnrichrAPITrait for EnrichrAPI {
     ) -> Result<(), APIFailure> {
         self.send_genes(gene_list, libraries, send_background).await
     }
-    async fn enrich(&mut self, library_name: &String) -> Result<EnrichrResult, APIFailure> {
-        self.enrich(library_name).await
+    async fn enrich(&mut self, library_name: &str) -> Result<EnrichrResult, APIFailure> {
+        let library_name = library_name.to_string();
+        self.enrich(&library_name).await
     }
     fn get_short_id(&self) -> Option<String> {
         self.get_short_id()

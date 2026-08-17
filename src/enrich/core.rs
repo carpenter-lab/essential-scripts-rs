@@ -667,7 +667,7 @@ mod tests {
         ) -> Result<(), APIFailure> {
             Ok(())
         }
-        async fn enrich(&mut self, library_name: &String) -> Result<EnrichrResult, APIFailure> {
+        async fn enrich(&mut self, library_name: &str) -> Result<EnrichrResult, APIFailure> {
             Ok(EnrichrResult::empty(library_name))
         }
         fn get_short_id(&self) -> Option<String> {
