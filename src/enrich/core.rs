@@ -761,12 +761,41 @@ mod tests {
         assert_eq!(Enrichment::parse_color(input), expected);
     }
 
-    #[test]
-    fn test_enrichr_result_empty() {
+    #[rstest]
+    #[timeout(Duration::from_secs(10))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_enrichr_result_empty() {
+        let libraries = vec!["test_lib".to_string()];
+        let gene_list = vec!["gene1".to_string()];
         let result = EnrichrResult::empty("test_lib");
         assert_eq!(result.library, "test_lib");
         assert_eq!(result.rank.len(), 1);
         assert_eq!(result.p_value, vec![1.0]);
+
+        let enrich = Enrichment {
+            gene_list,
+            libraries,
+            background: None,
+            results: vec![result],
+        };
+
+        let temp = TempDir::default();
+        let tsv_file = temp.with_file_name(get_timestamp()).with_extension("tsv");
+        let svg_file = temp.with_file_name(get_timestamp()).with_extension("svg");
+        let pdf_file = temp.with_file_name(get_timestamp()).with_extension("pdf");
+        let png_file = temp.with_file_name(get_timestamp()).with_extension("png");
+        assert!(enrich.save_results(tsv_file).is_ok());
+        assert!(
+            enrich
+                .bar_plot(
+                    vec![svg_file, pdf_file, png_file],
+                    Some("test_lib".to_string()),
+                    None,
+                    None
+                )
+                .await
+                .is_ok()
+        );
     }
 
     #[test]
