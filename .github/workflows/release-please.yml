@@ -1,5 +1,6 @@
 permissions:
   contents: write
+  issues: write
   pull-requests: write
 
 name: release-please
@@ -21,7 +22,7 @@ jobs:
           token: ${{ secrets.GH_TOKEN }}
           release-type: rust
       - name: Tag Latest Release as Stable
-        if: ${{ steps.release-please.outputs.release_created }}
+        if: ${{ steps.release-please.outputs.releases_created }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -31,10 +32,10 @@ jobs:
           git tag -a stable -m "Tag latest release as stable"
           git push origin stable
       - uses: actions/checkout@v6
-        if: ${{ steps.release-please.outputs.release_created }}
+        if: ${{ steps.release-please.outputs.releases_created }}
       - name: Build Minimal
-        if: ${{ steps.release-please.outputs.release_created }}
+        if: ${{ steps.release-please.outputs.releases_created }}
         run: cargo build --no-default-features
       - name: Build Docs
-        if: ${{ steps.release-please.outputs.release_created }}
+        if: ${{ steps.release-please.outputs.releases_created }}
         run: cargo run --no-default-features -- --markdown-help
