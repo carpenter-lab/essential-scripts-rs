@@ -6,7 +6,7 @@ use essential_scripts_rs::{
 };
 
 #[derive(Parser)]
-#[command(version, about, long_about = None)]
+#[command(version, about, long_about = None, arg_required_else_help = true)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -87,7 +87,7 @@ pub(crate) fn main_helper(_cli: Cli) {
 }
 
 fn main() {
-    let args = Cli::parse();
+    let args = Cli::try_parse().unwrap_or_else(|error| error.exit());
 
     if args.markdown_help {
         match docs::write_docs_to_file::<Cli>("docs/cli.md") {
@@ -113,8 +113,11 @@ mod tests {
 
     #[test]
     fn parses_no_command() {
-        let cli = Cli::try_parse_from(["essential-scripts-rs"]).unwrap();
-        assert!(cli.command.is_none());
+        let cli = Cli::try_parse_from(["essential-scripts-rs"]);
+        assert_eq!(
+            cli.err().unwrap().kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand,
+        );
     }
 
     #[test]

@@ -17,8 +17,6 @@ use clap::{Args, Error, Subcommand};
 use clap_binary_enum::YesNoArg;
 #[cfg(feature = "base_cmd")]
 use fastq::*;
-#[cfg(feature = "base_cmd")]
-use num_cpus;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, YesNoArg)]

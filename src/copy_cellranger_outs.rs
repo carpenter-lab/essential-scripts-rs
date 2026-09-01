@@ -520,6 +520,26 @@ mod tests {
         assert_eq!(stats.mex_dirs_created, 0);
         assert_eq!(stats.mex_dirs_cleaned_up, 0);
     }
+
+    #[rstest]
+    fn mex_create_dir_non_already_exists_error_skips_sample(
+        #[from(sample_dir_mex)] sample_dir: (PathBuf, PathBuf, PathBuf, TempDir),
+    ) {
+        let (_sample, base, _dest, temp_dir) = sample_dir;
+        let pipestance_dir = base.join("p1");
+        let missing_dest_parent = temp_dir.path().join("missing-parent").join("dest");
+
+        let stats =
+            copy_outputs_for_pipestance(&pipestance_dir, &missing_dest_parent, false, true, false)
+                .expect("copy should skip sample and continue on create_dir errors");
+
+        assert_eq!(stats.samples_seen, 1);
+        assert_eq!(stats.mex_dirs_created, 0);
+        assert_eq!(stats.mex_files_copied, 0);
+        assert_eq!(stats.mex_dirs_cleaned_up, 0);
+        assert!(!missing_dest_parent.exists());
+    }
+
     #[rstest]
     fn test_mri_tgz(temp_dir: TempDir) {
         let base = temp_dir.path().join("base");
