@@ -151,10 +151,10 @@ mod tests {
                 output_plot: vec![PathBuf::from("plot.png")],
             };
             if let Err(e) = handle_command(cmd) {
-                assert_eq!(e.kind(), clap::error::ErrorKind::MissingSubcommand);
+                assert_eq!(e.kind(), clap::ErrorKind::MissingSubcommand);
                 assert_eq!(
                     e.to_string(),
-                    "error: This command requires the `enrichment` feature. Rebuild with `--features enrichment`"
+                    "This command requires the `enrichment` feature. Rebuild with `--features enrichment`"
                 );
             }
         }

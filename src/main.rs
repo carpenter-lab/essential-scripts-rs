@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 mod docs;
 
 use essential_scripts_rs::{
-    aggregate, copy_cellranger_outs, enrich, geo_submission, plate_reader, split, tcr_align,
+    aggregate, copy_cellranger_outs, dryad, enrich, geo_submission, plate_reader, split, tcr_align,
 };
 
 #[derive(Parser)]
@@ -37,6 +37,9 @@ enum Commands {
 
     #[command(flatten)]
     RunEnrichr(enrich::Commands),
+
+    #[command(flatten)]
+    Dryad(dryad::Commands),
 }
 
 macro_rules! exit_on_error_feature_subcommand {
@@ -67,6 +70,7 @@ pub(crate) fn main_helper(cli: Cli) {
         Some(Commands::TcrAlign(cmd)) => tcr_align::handle_command(cmd),
         Some(Commands::MatchFastq(cmd)) => geo_submission::handle_command(&cmd),
         Some(Commands::RunEnrichr(cmd)) => enrich::handle_command(cmd),
+        Some(Commands::Dryad(cmd)) => dryad::handle_command(cmd),
         None => Ok(()),
     };
 

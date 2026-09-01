@@ -8,5 +8,6 @@ pub mod plate_reader;
 pub mod split;
 pub mod tcr_align;
 
+pub mod dryad;
 #[cfg(test)]
 pub mod test_helpers;
