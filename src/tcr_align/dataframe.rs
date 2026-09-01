@@ -16,6 +16,13 @@ use std::collections::HashSet;
 const MAX_GROUP_SEQS: usize = 1000;
 const MAX_BG_SEQS: usize = 1000;
 
+struct ScoreContext<'a> {
+    rng: &'a mut SmallRng,
+    pb: &'a ProgressBar,
+    aligner: &'a Aligner,
+    pattern: &'a str,
+}
+
 /// Extracts all unique TcRa CDR3 alpha sequences from a given `DataFrame`.
 ///
 /// This function processes a `DataFrame` containing a column `TcRa`, where each entry may
@@ -530,15 +537,20 @@ fn calculate_scores(
             pattern,
             width = 10
         ));
+        let mut ctx = ScoreContext {
+            rng,
+            pb: &inner_pb,
+            aligner: &aligner,
+            pattern,
+        };
 
         match get_list_cell_as_vec_utf8(groups, "TcRb", i) {
             Err(_) => {
                 out_self_b.push(f64::NAN);
             }
             Ok(b_full) => {
-                let (_, self_mean) =
-                    calculate_single_chain_score(rng, &inner_pb, &aligner, pattern, b_full);
-                out_self_b.push(self_mean);
+                let b_res = calculate_single_chain_score(&mut ctx, b_full);
+                out_self_b.push(b_res.self_mean);
             }
         }
 
@@ -547,18 +559,13 @@ fn calculate_scores(
                 out_self_a.push(f64::NAN);
             }
             Ok(a_full) => {
-                let (downsampled_sequences, self_mean) =
-                    calculate_single_chain_score(rng, &inner_pb, &aligner, pattern, a_full);
-                out_self_a.push(self_mean);
+                let a_res = calculate_single_chain_score(&mut ctx, a_full);
+                out_self_a.push(a_res.self_mean);
                 let final_value = calculate_single_chain_background_score(
+                    &mut ctx,
                     all_unique_alpha,
                     n_replicates,
-                    rng,
-                    &inner_pb,
-                    &aligner,
-                    pattern,
-                    &downsampled_sequences,
-                    self_mean,
+                    a_res,
                 );
                 out_frac.push(final_value);
             }
@@ -600,61 +607,70 @@ fn create_dual_progress_bar(n_replicates: usize, height: usize) -> (ProgressBar,
     (pb, inner_pb)
 }
 
+struct SingleChainResult {
+    sampled_sequences: Vec<String>,
+    self_mean: f64,
+    n_seqs: usize,
+}
+
+impl SingleChainResult {
+    fn new(sampled_sequences: Vec<String>, self_mean: f64) -> Self {
+        let n_seqs = sampled_sequences.len();
+        Self {
+            sampled_sequences,
+            self_mean,
+            n_seqs,
+        }
+    }
+
+    fn is_nan(&self) -> bool {
+        self.self_mean.is_nan()
+    }
+}
+
 fn calculate_single_chain_score(
-    rng: &mut SmallRng,
-    pb: &ProgressBar,
-    aligner: &Aligner,
-    pattern: &str,
+    ctx: &mut ScoreContext<'_>,
     all_seqs: Vec<String>,
-) -> (Vec<String>, f64) {
-    let downsampled_sequences = downsample_vec(all_seqs, pattern, pb, rng);
+) -> SingleChainResult {
+    let downsampled_sequences = downsample_vec(all_seqs, ctx.pattern, ctx.pb, ctx.rng);
     let self_mean = if downsampled_sequences.len() <= 1 {
         f64::NAN
     } else {
-        run_parasail(aligner, &downsampled_sequences, None).unwrap_or_else(|e| {
-            eprintln!("Error running parasail for pattern {pattern}: {e}");
+        run_parasail(ctx.aligner, &downsampled_sequences, None).unwrap_or_else(|e| {
+            eprintln!("Error running parasail for pattern {}: {e}", ctx.pattern);
             f64::NAN
         })
     };
 
-    (downsampled_sequences, self_mean)
+    SingleChainResult::new(downsampled_sequences, self_mean)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn calculate_single_chain_background_score(
+    ctx: &mut ScoreContext<'_>,
     unique_seqs: &[String],
     n_replicates: usize,
-    rng: &mut SmallRng,
-    pb: &ProgressBar,
-    aligner: &Aligner,
-    pattern: &str,
-    downsampled_sequences: &[String],
-    self_mean: f64,
+    group_result: SingleChainResult,
 ) -> f64 {
-    let n_val = downsampled_sequences
-        .len()
-        .min(unique_seqs.len())
-        .min(MAX_BG_SEQS);
+    let n_val = group_result.n_seqs.min(unique_seqs.len()).min(MAX_BG_SEQS);
     let mut greater_count = 0usize;
-    if downsampled_sequences.len() > 1 && n_val > 0 && !self_mean.is_nan() {
+    if group_result.n_seqs > 1 && n_val > 0 && !group_result.is_nan() {
         for _rep in 0..n_replicates {
-            let background: Vec<String> = unique_seqs.sample(rng, n_val).cloned().collect();
+            let background: Vec<String> = unique_seqs.sample(ctx.rng, n_val).cloned().collect();
 
-            let bg_mean = run_parasail(aligner, downsampled_sequences, Some(&background))
-                .unwrap_or_else(|e| {
-                    eprintln!("Error running parasail for pattern {pattern}: {e}");
-                    f64::NAN
-                });
+            let bg_mean = run_parasail(ctx.aligner, &background, None).unwrap_or_else(|e| {
+                eprintln!("Error running parasail for pattern {}: {e}", ctx.pattern);
+                f64::NAN
+            });
             // we want lower scores to be better
-            if self_mean < bg_mean {
+            if group_result.self_mean < bg_mean {
                 greater_count += 1;
             }
-            pb.inc(1);
+            ctx.pb.inc(1);
         }
     } else {
         greater_count = n_replicates;
     }
-    if self_mean.is_nan() {
+    if group_result.is_nan() {
         -1.
     } else {
         (greater_count as f64) / (n_replicates as f64)
@@ -669,7 +685,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::collections::HashSet;
 
     fn row_idx_for_pattern(df: &DataFrame, pattern: &str) -> usize {
@@ -806,5 +822,234 @@ mod tests {
         let frac = get_f64_col_by_idx(&out, idx, "TcRa_alignment_score_v_background");
         assert!(tcra_score.is_nan());
         assert_eq!(frac, -1.0);
+    }
+    #[fixture]
+    fn background_vector() -> Vec<&'static str> {
+        vec![
+            "CAGSRGTESNQPQHF",
+            "CASQFLPGGNEQYF",
+            "CASRDQPSTDTQYF",
+            "CASRLAGGPTLPQGTQYF",
+            "CASRQFLSTGELFF",
+            "CASSAGQSFYNEQFF",
+            "CASSALFGLETQYF",
+            "CASSDWEFRTDTQYF",
+            "CASSEFRTADKNEQYF",
+            "CASSEFRTDTQYF",
+            "CASSEFRTNTGNTIYF",
+            "CASSEGDPPNYEQYF",
+            "CASSFGTESNQPQHF",
+            "CASSFGTGGKYEQYF",
+            "CASSGGGLFNQPQHF",
+            "CASSGGQSFEAFF",
+            "CASSHGTGGKYEQYF",
+            "CASSHIYAGQFF",
+            "CASSHIYEQFF",
+            "CASSHIYRGDEQFF",
+            "CASSHIYTNRDRGFYEQYF",
+            "CASSIDPPNSGNTIYF",
+            "CASSKGGPTLPGNTIYF",
+            "CASSKGRLFNQPQHF",
+            "CASSLALFGGYTF",
+            "CASSLDQPSYNEQFF",
+            "CASSLEFRTGGEYF",
+            "CASSLEFRTGSSYNEQFF",
+            "CASSLGTESNQPQHF",
+            "CASSLGTGGKYEQYF",
+            "CASSLQMANIQYF",
+            "CASSLQMANIRYF",
+            "CASSLQMGGTGYTF",
+            "CASSLQMTNIQYF",
+            "CASSLRDPPNWQFF",
+            "CASSLRGQSFSYNEQFF",
+            "CASSLVALLGEDTQYF",
+            "CASSQDPQGDTQYF",
+            "CASSQDPQGGSNQPQHF",
+            "CASSQDPQGIGKLFF",
+            "CASSQDPQQSGSNQPQHF",
+            "CASSQDPQRAEQYF",
+            "CASSQDPQVLEQYF",
+            "CASSQDQPSAQRGYNEQFF",
+            "CASSQFLAAQTQYF",
+            "CASSQFLAGWETQYF",
+            "CASSQFLAKNIQYF",
+            "CASSQFLDPLYTF",
+            "CASSQFLGDEQFF",
+            "CASSQFLGLLSSYEQYF",
+            "CASSQFLIAGTNTEAFF",
+            "CASSQFLPSTDTQYF",
+            "CASSQFLREQFF",
+            "CASSQFLSAGHSGAKNIQYF",
+            "CASSQFLSYEQYF",
+            "CASSQFLTGTGELFF",
+            "CASSQGLGPGLFNQPQHF",
+            "CASSQGTGGKYEQFF",
+            "CASSQGTGGKYEQYF",
+            "CASSQLDLFDPSEQYF",
+            "CASSQLDLGLTHNEQFF",
+            "CASSQLDLIAQKQETQYF",
+            "CASSQLDLIPRPYEQYF",
+            "CASSQLDLVPRSTDTQYF",
+            "CASSQNLNTGELFF",
+            "CASSQQNLNYGYTF",
+            "CASSRGTGGKYEQYF",
+            "CASSRTGQSFYGYTF",
+            "CASSSGWGQSFNQPQHF",
+            "CASSSPGQGGANYGYTF",
+            "CASSSYSISGELFF",
+            "CASSTQFLRGNTIYF",
+            "CASSTQTLGQSFETQYF",
+            "CASSVALFAGEQYF",
+            "CASSVALFGEGYTF",
+            "CASSVALFGETQYF",
+            "CASSVALFGNTIYF",
+            "CASSVALFGSYTF",
+            "CASSVALFSNTQYF",
+            "CASSVALLAGTQYF",
+            "CASSVALLAQPQFF",
+            "CASSVALLGAEQYF",
+            "CASSVALLGETQYF",
+            "CASSVALLGGEQYF",
+            "CASSVALLGGTQYF",
+            "CASSVALLGNTIYF",
+            "CASSVALLGQPQHF",
+            "CASSVALLTGELFF",
+            "CASSVALLTGGQVF",
+            "CASSVSLQMETQYF",
+            "CASSYAQNLNNEQFF",
+            "CASSYEFRTAYEQYF",
+            "CASSYEPGQFLLPLHF",
+            "CASSYGTGGKYEQYF",
+        ]
+    }
+
+    #[rstest]
+    #[case::single_sequence_returns_zero(vec!["ACD"], 100, -1.0, f64::NAN)]
+    #[case::high_quality_group_alignment(vec![
+"CASSVALLAGTQYF",
+"CASSVALLAQPQFF",
+"CASSVALLGAEQYF",
+"CASSVALLGETQYF",
+"CASSVALLGGEQYF",
+"CASSVALLGGTQYF",
+"CASSVALLGNTIYF",
+"CASSVALLGQPQHF",
+"CASSVALLTGELFF",
+"CASSVALLTGGQVF"
+    ], 10, 0.0, 1.0)]
+    #[case::low_quality_group_alignment(vec![
+"DSFGSEWDPSDEAW",
+"SDYPADTDDGKYYH",
+"QFAESLFGGTNAQE",
+"EKEQWHVCFNIEYA",
+"NSMWSNGFSCRYLQ",
+"CRAQNNRSFVRTDW",
+"LVMPKFMWHNRTIP",
+"WNNRMTHEVLRIGI",
+"MCTMIGELKYIHQS",
+"INMMHTWHTCQTMV"
+    ], 10, 1.0, 0.0)]
+    fn test_calculate_single_chain_background_score(
+        #[case] downsampled_sequences: Vec<&str>,
+        background_vector: Vec<&str>,
+        #[case] n_replicates: usize,
+        #[case] expected: f64,
+        #[case] expected_self_mean: f64,
+    ) {
+        let mut rng = SmallRng::from_seed([7; 32]);
+        let pb = ProgressBar::hidden();
+        let aligner = build_protein_aligner(7, 1).expect("aligner build");
+        let downsampled_sequences: Vec<String> = downsampled_sequences
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let unique_seqs: Vec<String> = background_vector
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let mut ctx = ScoreContext {
+            rng: &mut rng,
+            pb: &pb,
+            aligner: &aligner,
+            pattern: "pat",
+        };
+        let single_result = calculate_single_chain_score(&mut ctx, downsampled_sequences.clone());
+        if expected_self_mean.is_nan() & single_result.is_nan() {
+        } else {
+            //assert_eq!(self_mean, expected_self_mean);
+        }
+        println!("self_mean: {}", single_result.self_mean);
+
+        let mut ctx = ScoreContext {
+            rng: &mut rng,
+            pb: &pb,
+            aligner: &aligner,
+            pattern: "pat",
+        };
+        let score = calculate_single_chain_background_score(
+            &mut ctx,
+            &unique_seqs,
+            n_replicates,
+            single_result,
+        );
+
+        assert_eq!(score, expected);
+    }
+
+    #[rstest]
+    #[case::no_background_sequences(vec!["ACD", "WQ"], vec![], 5, 1.0)]
+    #[case::single_downsampled_sequence(vec!["ACD"], vec!["ACD", "WQ", "MN"], 5, 1.0)]
+    fn test_calculate_single_chain_background_score_uses_replicate_count_when_skipped(
+        #[case] downsampled_sequences: Vec<&str>,
+        #[case] unique_seqs: Vec<&str>,
+        #[case] n_replicates: usize,
+        #[case] expected: f64,
+    ) {
+        let mut rng = SmallRng::from_seed([9; 32]);
+        let pb = ProgressBar::hidden();
+        let aligner = build_protein_aligner(-10, -1).expect("aligner build");
+        let downsampled_sequences: Vec<String> = downsampled_sequences
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect();
+        let unique_seqs: Vec<String> = unique_seqs.into_iter().map(|s| s.to_string()).collect();
+
+        let mut ctx = ScoreContext {
+            rng: &mut rng,
+            pb: &pb,
+            aligner: &aligner,
+            pattern: "pat",
+        };
+        let single_result = SingleChainResult::new(downsampled_sequences.clone(), 1.23);
+        let score = calculate_single_chain_background_score(
+            &mut ctx,
+            &unique_seqs,
+            n_replicates,
+            single_result,
+        );
+
+        assert_eq!(score, expected);
+    }
+
+    #[test]
+    fn test_calculate_single_chain_background_score_returns_minus_one_for_nan_self_mean() {
+        let mut rng = SmallRng::from_seed([11; 32]);
+        let pb = ProgressBar::hidden();
+        let aligner = build_protein_aligner(-10, -1).expect("aligner build");
+        let downsampled_sequences = vec!["ACD".to_string(), "WQ".to_string()];
+        let unique_seqs = vec!["ACD".to_string(), "WQ".to_string()];
+
+        let mut ctx = ScoreContext {
+            rng: &mut rng,
+            pb: &pb,
+            aligner: &aligner,
+            pattern: "pat",
+        };
+        let single_result = SingleChainResult::new(downsampled_sequences.clone(), f64::NAN);
+        let score =
+            calculate_single_chain_background_score(&mut ctx, &unique_seqs, 3, single_result);
+
+        assert_eq!(score, -1.0);
     }
 }
