@@ -1,4 +1,6 @@
 name: Clippy Lint
+permissions:
+  contents: read
 
 on:
   push:
@@ -24,7 +26,41 @@ jobs:
             libcairo2-dev \
             libfontconfig1-dev \
             libfreetype6-dev
+      - name: Install required cargo dependencies
+        run: cargo install clippy-sarif sarif-fmt
       - name: Run Clippy All Features
-        run: cargo clippy --all-features --locked
+        run: cargo clippy --all-features --locked --message-format=json | clippy-sarif | tee rust-clippy-results-all.sarif | sarif-fmt
+        continue-on-error: true
       - name: Run Clippy Default Features
-        run: cargo clippy --locked
+        run: cargo clippy --locked --message-format=json | clippy-sarif | tee rust-clippy-results-default.sarif | sarif-fmt
+        continue-on-error: true
+      - name: Combine Clippy Results
+        run: |
+          jq -s '
+          # collect all results into one array, then unique by a key
+          def result_key:
+              [
+                (.ruleId // ""),
+                (.message.text // ""),
+                (.locations[ 0 ].physicalLocation.artifactLocation.uri // ""),
+                (.locations[ 0 ].physicalLocation.region.startLine // ""),
+                (.locations[ 0 ].physicalLocation.region.startColumn // "")
+                ] | join(":");
+          
+            {
+              schemaUri: (.[0].schemaUri),
+              version: (.[0].version),
+              runs: [
+                {
+                  tool: (.[0].runs[0].tool),
+                  results: ((map(.runs[].results) | add)
+                             | unique_by(result_key))
+                             }
+                             ]
+                             }
+                             ' rust-clippy-results-*.sarif > clippy-results.sarif
+      - name: Upload analysis results to GitHub
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: clippy-results.sarif
+          wait-for-processing: true
