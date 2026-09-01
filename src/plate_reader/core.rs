@@ -150,13 +150,13 @@ fn extract_numeric(s: &str) -> Option<f64> {
         if ch.is_ascii_digit() {
             num_str.push(ch);
             has_digit = true;
-        } else if ch == '.' && !has_decimal && has_digit {
-            num_str.push(ch);
-            has_decimal = true;
         } else if ch == '.' && !has_decimal {
-            // Decimal before any digit
             num_str.push(ch);
             has_decimal = true;
+        } else if ch == '.' && has_decimal {
+            // parse two decimal points as invalid
+            has_digit = false;
+            break;
         } else if has_digit {
             // Stop at first non-numeric after we've found digits
             break;
@@ -426,6 +426,7 @@ mod tests {
     use crate::io::read_excel;
     use polars_testing::asserts::{DataFrameEqualOptions, assert_dataframe_equal};
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
 
     #[test]
     fn test_stride_of_one() {
@@ -489,8 +490,28 @@ mod tests {
     }
 
     #[test]
+    fn test_stride_equal_to_rows() {
+        let df = df![
+            "A" => [1, 2, 3],
+            "B" => [4, 5, 6],
+        ]
+        .unwrap();
+
+        // stride == height
+        let result = flatten_by_stride(&df, 3).unwrap();
+
+        let expected = vec![
+            vec![vec![AnyValue::Int32(1), AnyValue::Int32(4)]],
+            vec![vec![AnyValue::Int32(2), AnyValue::Int32(5)]],
+            vec![vec![AnyValue::Int32(3), AnyValue::Int32(6)]],
+        ];
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
     fn test_run() {
-        let input_path = PathBuf::from("test/plate_reader_data.xlsx");
+        let input_path = PathBuf::from("tests/data/plate_reader_data.xlsx");
         let df = run(
             &input_path,
             "[Concentration]",
@@ -500,7 +521,7 @@ mod tests {
             23,
         );
         let expected = read_excel(
-            &PathBuf::from("test/plate_reader_data_expected.xlsx"),
+            &PathBuf::from("tests/data/plate_reader_data_expected.xlsx"),
             Some("1 to 2"),
             0,
             Some(true),
@@ -527,5 +548,20 @@ mod tests {
             DataFrameEqualOptions::new(),
         )
         .unwrap();
+    }
+
+    #[rstest]
+    #[case("123.45", Some(123.45))]
+    #[case("0", Some(0.0))]
+    #[case("1", Some(1.0))]
+    #[case("abc", None)]
+    #[case("123abc", Some(123.0))]
+    #[case("123.45abc", Some(123.45))]
+    #[case("123.45.67", None)]
+    #[case("1..2", None)]
+    #[case(">0.1", Some(0.1))]
+    fn test_extract_numeric(#[case] input: &str, #[case] expected: Option<f64>) {
+        let result = extract_numeric(input);
+        assert_eq!(result, expected);
     }
 }

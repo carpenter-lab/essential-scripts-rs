@@ -28,14 +28,23 @@ pub enum Progress {
     #[yesno(help = "Hide progress bar")]
     NoProgress,
 }
+#[cfg(test)]
+fn num_cpu() -> usize {
+    4
+}
+
+#[cfg(not(test))]
+fn num_cpu() -> usize {
+    num_cpus::get()
+}
 
 #[cfg(feature = "base_cmd")]
 fn thread_parser() -> RangedI64ValueParser<i32> {
-    clap::value_parser!(i32).range(1 + -(num_cpus::get() as i64)..=num_cpus::get() as i64)
+    clap::value_parser!(i32).range(1 + -(num_cpu() as i64)..=num_cpu() as i64)
 }
 #[cfg(feature = "base_cmd")]
 fn thread_default() -> i32 {
-    num_cpus::get().try_into().unwrap()
+    num_cpu().try_into().unwrap()
 }
 
 #[cfg(not(feature = "base_cmd"))]

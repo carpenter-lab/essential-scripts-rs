@@ -36,7 +36,7 @@ fn write_lazy_output(lf: LazyFrame, output_file: PathBuf, separator: u8) {
             include_bom: false,
             compression: ExternalCompression::default(),
             check_extension: false,
-            include_header: false,
+            include_header: true,
             batch_size: NonZero::new(1024).unwrap(),
             serialize_options: Arc::from(SerializeOptions {
                 date_format: None,
@@ -370,9 +370,31 @@ pub fn read_excel(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::*;
     use pretty_assertions::assert_eq;
-    use rstest::rstest;
+    use rstest::*;
+    use rstest_reuse::{apply, template};
+    use std::fs;
     use std::path::PathBuf;
+    use temp_testdir::TempDir;
+
+    fn collect_df(lf: LazyFrame) -> DataFrame {
+        lf.collect().expect("failed to collect lazyframe")
+    }
+
+    #[fixture]
+    fn test_df() -> DataFrame {
+        df![
+            "a" => &[1],
+            "b" => &[2]
+        ]
+        .expect("failed to build dataframe")
+    }
+
+    #[fixture]
+    fn test_lf(test_df: DataFrame) -> LazyFrame {
+        test_df.lazy()
+    }
 
     #[rstest]
     #[case("data.csv", Some("csv"))]
@@ -393,5 +415,159 @@ mod tests {
     #[case("''", "")]
     fn test_strip_quotes(#[case] s: &str, #[case] exp: String) {
         assert_eq!(strip_quotes(s), exp);
+    }
+
+    #[template]
+    #[rstest]
+    #[case::parse_csv(Some(b','), "a,b\n1,2\n", Some("csv"))]
+    #[case::parse_tsv(Some(b'\t'), "a\tb\n1\t2\n", Some("tsv"))]
+    #[case::parse_tsv_default_sep(None, "a\tb\n1\t2\n", Some("tsv"))]
+    #[should_panic(expected = "Unsupported separator")]
+    #[case::fail_unsupported_sep(Some(b';'), "a\tb\n1\t2\n", Some("csv"))]
+    #[case::parse_tsv_no_ext(None, "a\tb\n1\t2\n", None)]
+    fn file_case_template(#[case] sep: Option<u8>, #[case] text: &str, #[case] ext: Option<&str>) {}
+
+    #[apply(file_case_template)]
+    fn read_from_file_with_sep(
+        #[case] sep: Option<u8>,
+        #[case] text: &str,
+        #[case] ext: Option<&str>,
+    ) {
+        let temp = TempDir::default();
+        let path = temp
+            .with_file_name(get_timestamp())
+            .with_extension(ext.unwrap_or(""));
+        write_text_file(&path, text);
+
+        let df = collect_df(read_from_file(path, sep));
+
+        assert_eq!(df.shape(), (1, 2));
+        assert_eq!(df.get_column_names()[0].as_str(), "a");
+        assert_eq!(df.get_column_names()[1].as_str(), "b");
+    }
+
+    #[apply(file_case_template)]
+    fn write_to_flat(
+        #[case] sep: Option<u8>,
+        #[case] text: &str,
+        #[case] ext: Option<&str>,
+        test_df: DataFrame,
+    ) {
+        let temp = TempDir::default();
+        let path = temp
+            .with_file_name(get_timestamp())
+            .with_extension(ext.unwrap_or(""));
+
+        test_df.write_to_flat_or_stdout(path.clone(), sep);
+        let written = fs::read_to_string(&path).expect("failed to read output file");
+        assert!(
+            written.contains(text),
+            "expected row {text}, got: {written}"
+        );
+    }
+
+    #[apply(file_case_template)]
+    fn write_to_flat_lazy(
+        #[case] sep: Option<u8>,
+        #[case] text: &str,
+        #[case] ext: Option<&str>,
+        test_lf: LazyFrame,
+    ) {
+        let temp = TempDir::default();
+        let path = temp
+            .with_file_name(get_timestamp())
+            .with_extension(ext.unwrap_or(""));
+
+        test_lf.write_to_flat_or_stdout(path.clone(), sep);
+        let written = fs::read_to_string(&path).expect("failed to read output file");
+        assert!(
+            written.contains(text),
+            "expected row {text}, got: {written}"
+        );
+    }
+
+    #[rstest]
+    fn tsv_parsing_regression_tab_delimited_file_produces_two_columns() {
+        let temp = TempDir::default();
+        let path = temp.with_file_name(get_timestamp()).with_extension("tsv");
+        write_text_file(&path, "col1\tcol2\nv1\tv2\n");
+
+        let df = collect_df(read_from_file(path.clone(), Some(b'\t')));
+
+        // This test is intentionally strict: if TSV is parsed as CSV, you'll get one column.
+        assert_eq!(
+            df.width(),
+            2,
+            "TSV should parse into 2 columns; got {} columns with names {:?}",
+            df.width(),
+            df.get_column_names()
+        );
+    }
+
+    #[test]
+    fn read_excel_header_false_generates_column_names() {
+        let path = PathBuf::from("tests/data/plate_reader_data.xlsx");
+        let df = read_excel(&path, None, 0, Some(false))
+            .expect("expected read with header=false to succeed");
+
+        let names = df.get_column_names();
+        assert!(
+            !names.is_empty(),
+            "expected at least one generated column name"
+        );
+        assert_eq!(names[0].as_str(), "column_0");
+    }
+
+    #[test]
+    fn read_excel_skiprows_reduces_height() {
+        let path = PathBuf::from("tests/data/plate_reader_data_expected.xlsx");
+
+        let df_no_skip = read_excel(&path, None, 0, None).expect("read without skiprows failed");
+        let df_skip_1 = read_excel(&path, None, 1, None).expect("read with skiprows=1 failed");
+
+        assert!(
+            df_skip_1.height() < df_no_skip.height(),
+            "skiprows should not increase row count"
+        );
+    }
+
+    #[rstest]
+    #[should_panic(
+        expected = "Failed to get sheet 'this_sheet_does_not_exist': Worksheet 'this_sheet_does_not_exist' not found"
+    )]
+    #[case::nonexisting_sheet(
+        "tests/data/plate_reader_data.xlsx",
+        Some("this_sheet_does_not_exist"),
+        None
+    )]
+    #[should_panic(
+        expected = "Failed to open Excel file: I/O error: No such file or directory (os error 2)"
+    )]
+    #[case::nonexisting_file("tests/data/this_file_does_not_exist.xlsx", None, None)]
+    #[should_panic(expected = "Duplicate column names found in Excel sheet")]
+    #[case::duplicate_header_none("tests/data/duplicate_headers.xlsx", None, None)]
+    #[should_panic(expected = "Duplicate column names found in Excel sheet")]
+    #[case::duplicate_header_true("tests/data/duplicate_headers.xlsx", None, Some(true))]
+    #[case::duplicate_header_false("tests/data/duplicate_headers.xlsx", None, Some(false))]
+    #[should_panic(expected = "Duplicate column names found in Excel sheet")]
+    #[case::normal_file("tests/data/plate_reader_data.xlsx", None, None)]
+    fn test_read_excel(
+        #[case] path: PathBuf,
+        #[case] sheet: Option<&str>,
+        #[case] header: Option<bool>,
+    ) {
+        let df = read_excel(&path, sheet, 0, header).unwrap();
+
+        assert!(df.width() > 0, "expected at least one column");
+        assert!(df.height() > 0, "expected at least one row");
+    }
+
+    #[rstest]
+    #[case::normal_file("tests/data/plate_reader_data_expected.xlsx")]
+    fn test_read_excel_from_generic(#[case] path: PathBuf) {
+        let df = read_from_file(path, None).collect().unwrap();
+
+        assert!(df.width() > 0, "expected at least one column");
+        assert!(df.height() > 0, "expected at least one row");
     }
 }

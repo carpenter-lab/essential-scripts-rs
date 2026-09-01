@@ -281,16 +281,18 @@ mod tests {
     }
 
     // Test helper to set the BLOSUM62 OnceLock to a failure. This is only available in tests.
-    #[cfg(test)]
-    pub(crate) fn set_blosum62_to_err_for_test(msg: &str) -> Result<(), String> {
+    fn set_blosum62_to_err_for_test(msg: &str) -> Result<(), String> {
         BLOSUM62
             .set(Err(msg.to_string()))
             .map_err(|_| "BLOSUM62 already initialized".to_string())
     }
 
     #[test]
-    #[ignore = "for manual testing only"]
     fn test_blosum62_error_handling() {
+        assert!(
+            std::env::var_os("NEXTEST").is_some(),
+            "this test must be run with `cargo nextest run` because it relies on nextest's per-test process isolation"
+        );
         // Force the BLOSUM62 to an error state
         set_blosum62_to_err_for_test("test error").expect("set error");
 

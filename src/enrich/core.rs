@@ -1,4 +1,4 @@
-use crate::enrich::api::EnrichrAPI;
+use crate::enrich::api::{EnrichrAPI, EnrichrAPITrait};
 use crate::io::WriteToCsvOrStdout;
 use cairo;
 use plotters::coord::Shift;
@@ -8,6 +8,7 @@ use polars::polars_utils::itertools::Itertools;
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tokio;
@@ -173,8 +174,7 @@ pub struct Enrichment {
     pub gene_list: Vec<String>,
     pub libraries: Vec<String>,
     pub background: Option<Vec<String>>,
-    api: Option<EnrichrAPI>,
-    results: Vec<EnrichrResult>,
+    pub results: Vec<EnrichrResult>,
 }
 
 impl Enrichment {
@@ -183,7 +183,6 @@ impl Enrichment {
             gene_list,
             libraries,
             background: None,
-            api: None,
             results: Vec::new(),
         }
     }
@@ -193,42 +192,28 @@ impl Enrichment {
         self
     }
 
-    pub fn build(&mut self) -> &mut Self {
-        self.api = Some(EnrichrAPI::new(self.to_owned()));
-        self
-    }
+    pub async fn run<A: EnrichrAPITrait>(
+        &mut self,
+        api: &mut A,
+    ) -> Result<&mut Self, Box<dyn Error>> {
+        api.send_genes(&self.gene_list, &self.libraries, false)
+            .await?;
+        if self.background.is_some() {
+            api.send_genes(&self.gene_list, &self.libraries, true)
+                .await?;
+        }
 
-    pub async fn run(&mut self) -> Result<&mut Self, Box<dyn std::error::Error>> {
-        match &mut self.api {
-            Some(api) => {
-                api.send_genes(&self.gene_list, &self.libraries, false)
-                    .await?;
-                if self.background.is_some() {
-                    api.send_genes(&self.gene_list, &self.libraries, true)
-                        .await?;
-                }
-
-                for lib in &self.libraries {
-                    self.results.push(api.enrich(lib).await?);
-                }
-            }
-            None => {
-                return Err(Box::new(std::io::Error::other(
-                    "API not initialized. Call build() before run().",
-                )));
-            }
+        for lib in &self.libraries {
+            self.results.push(api.enrich(lib).await?);
         }
 
         Ok(self)
     }
-    pub fn get_short_id(&self) -> Option<String> {
-        match self.api {
-            None => None,
-            Some(ref api) => api.get_short_id(),
-        }
+    pub fn get_short_id<A: EnrichrAPITrait>(&self, api: &A) -> Option<String> {
+        api.get_short_id()
     }
 
-    pub fn save_results(&self, path_buf: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn save_results(&self, path_buf: PathBuf) -> Result<(), Box<dyn Error>> {
         let df: Vec<LazyFrame> = self
             .results
             .iter()
@@ -269,7 +254,7 @@ impl Enrichment {
         message: &str,
         width: u32,
         height: u32,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+    ) -> Result<(), Box<dyn Error + Send + Sync>>
     where
         DB::ErrorType: 'static,
     {
@@ -290,7 +275,7 @@ impl Enrichment {
         message: &str,
         width: u32,
         height: u32,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let ext = path
             .extension()
             .and_then(|s| s.to_str())
@@ -332,7 +317,7 @@ impl Enrichment {
         n: usize,
         color_primary: RGBColor,
         color_secondary: RGBColor,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+    ) -> Result<(), Box<dyn Error + Send + Sync>>
     where
         DB::ErrorType: 'static,
     {
@@ -374,7 +359,7 @@ impl Enrichment {
         color_primary: RGBColor,
         color_secondary: RGBColor,
         top_n: usize,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         const BAR_HEIGHT_PER_ITEM: u32 = 70;
         const MIN_BAR_ROWS: u32 = 5;
 
@@ -468,7 +453,7 @@ impl Enrichment {
         library: Option<String>,
         color: Option<String>,
         color2: Option<String>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), Box<dyn Error>> {
         let lib = library.unwrap_or_else(|| self.libraries[0].clone());
         let color = color.unwrap_or_else(|| "lightskyblue".to_string());
         let color2 = color2.unwrap_or_else(|| "lightgrey".to_string());
@@ -480,7 +465,7 @@ impl Enrichment {
             .ok_or_else(|| {
                 Box::new(std::io::Error::other(format!(
                     "No results found for library: {lib}"
-                ))) as Box<dyn std::error::Error>
+                ))) as Box<dyn Error>
             })?;
 
         // Clone for blocking thread
@@ -504,12 +489,12 @@ impl Enrichment {
                     top_n,
                 )?;
             }
-            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+            Ok::<(), Box<dyn Error + Send + Sync>>(())
         })
         .await;
 
         // Map JoinError -> plain boxed error, then handle inner boxed error explicitly
-        let inner_res: Result<(), Box<dyn std::error::Error + Send + Sync>> = match join_result {
+        let inner_res: Result<(), Box<dyn Error + Send + Sync>> = match join_result {
             Ok(res) => res,
             Err(join_err) => {
                 return Err(Box::from(format!(
@@ -533,27 +518,19 @@ pub async fn enrich_command(
     background: Option<PathBuf>,
     output_file: PathBuf,
     output_plot: Vec<PathBuf>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let genes: Vec<String> = fs::read_to_string(&gene_list)?
-        .lines()
-        .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty())
-        .collect();
+) -> Result<(), Box<dyn Error>> {
+    let genes = get_genes(&gene_list)?;
     let libraries = vec![library.clone()];
     let mut enrich = Enrichment::new(genes, libraries);
 
     if let Some(path) = &background {
-        let bg_genes: Vec<String> = fs::read_to_string(path)?
-            .lines()
-            .map(|line| line.trim().to_string())
-            .filter(|line| !line.is_empty())
-            .collect();
+        let bg_genes: Vec<String> = get_genes(path)?;
         enrich.with_background(bg_genes);
     }
-    enrich.build();
-    enrich.run().await?;
+    let mut api = EnrichrAPI::new(enrich.background.clone());
+    enrich.run(&mut api).await?;
 
-    if let Some(short_id) = enrich.get_short_id()
+    if let Some(short_id) = enrich.get_short_id(&api)
         && background.is_none()
     {
         println!(
@@ -565,4 +542,284 @@ pub async fn enrich_command(
         .bar_plot(output_plot, Some(library), None, None)
         .await?;
     Ok(())
+}
+
+fn get_genes(gene_list: &PathBuf) -> Result<Vec<String>, Box<dyn Error>> {
+    let genes: Vec<String> = fs::read_to_string(gene_list)?
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect();
+    Ok(genes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::enrich::api::APIFailure;
+    use crate::test_helpers::*;
+    use pretty_assertions::{assert_eq, assert_ne};
+    use rstest::{Context, fixture, rstest};
+    use std::time::Duration;
+    use temp_testdir::TempDir;
+
+    #[fixture]
+    fn create_test_results() -> EnrichrResult {
+        EnrichrResult::new(
+            vec![1, 2, 3, 4, 5],
+            vec![
+                "t1".to_string(),
+                "t2".to_string(),
+                "t3".to_string(),
+                "t4".to_string(),
+                "t5".to_string(),
+            ],
+            vec![0.01, 0.02, 0.03, 0.04, 0.05],
+            vec![5.0, 4.0, 3.0, 2.0, 1.0],
+            "lib1".to_string(),
+            vec![
+                "g1".to_string(),
+                "g2".to_string(),
+                "g3".to_string(),
+                "g4".to_string(),
+                "g5".to_string(),
+            ],
+            vec![0.01, 0.02, 0.03, 0.04, 0.05],
+            vec![5.0, 4.0, 3.0, 2.0, 1.0],
+        )
+    }
+
+    #[rstest]
+    fn test_get_genes() {
+        let gene_list = PathBuf::from("tests/data/example_gene_list.txt");
+        let actual = get_genes(&gene_list).unwrap();
+        assert_eq!(actual.len(), 614);
+        assert_eq!(actual[0], "A1CF");
+        assert_eq!(actual[613], "ZNF831");
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(10))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_enrich_command_to_api_backend(#[values(true, false)] use_background: bool) {
+        let library = "Reactome_Pathways_2024".to_string();
+        let gene_list = PathBuf::from("tests/data/example_gene_list.txt");
+
+        let genes = get_genes(&gene_list).unwrap();
+        let libraries = vec![library.clone()];
+        let mut enrich = Enrichment::new(genes, libraries);
+
+        if use_background {
+            let background = PathBuf::from("tests/data/example_background.txt");
+            let bg_genes: Vec<String> = get_genes(&background).unwrap();
+            enrich.with_background(bg_genes);
+        }
+
+        let mut api = EnrichrAPI::new(enrich.background.clone());
+        enrich.run(&mut api).await.unwrap();
+        let temp = TempDir::default();
+        let tsv_file = temp.with_file_name(get_timestamp()).with_extension("tsv");
+        let svg_file = temp.with_file_name(get_timestamp()).with_extension("svg");
+        let pdf_file = temp.with_file_name(get_timestamp()).with_extension("pdf");
+        let png_file = temp.with_file_name(get_timestamp()).with_extension("png");
+        assert!(enrich.save_results(tsv_file).is_ok());
+        assert!(
+            enrich
+                .bar_plot(
+                    vec![svg_file, pdf_file, png_file],
+                    Some(library),
+                    None,
+                    None
+                )
+                .await
+                .is_ok()
+        );
+
+        let df = enrich.results[0].to_dataframe().unwrap();
+        assert_eq!(df.height(), 791);
+        assert_eq!(df.width(), 8);
+    }
+
+    #[test]
+    fn test_enrichr_result_from_json() {
+        let json = serde_json::json!([
+            [1, "term1", 0.01, 2.0, 3.0, ["gene1", "gene2"], 0.05],
+            [2, "term2", 0.05, 1.0, 2.0, ["gene3"], 0.1]
+        ]);
+        let result = EnrichrResult::new_from_json(&json, "lib1");
+        assert_eq!(result.rank, vec![1, 2]);
+        assert_eq!(result.term, vec!["term1", "term2"]);
+        assert_eq!(result.p_value, vec![0.01, 0.05]);
+        assert_eq!(result.zscore, vec![2.0, 1.0]);
+        assert_eq!(result.combined_score, vec![3.0, 2.0]);
+        assert_eq!(result.overlap_genes, vec!["gene1, gene2", "gene3"]);
+        assert_eq!(result.q_value, vec![0.05, 0.1]);
+        assert_eq!(result.library, "lib1");
+    }
+
+    struct MockEnrichrAPI;
+    impl EnrichrAPITrait for MockEnrichrAPI {
+        async fn send_genes(
+            &mut self,
+            _gene_list: &[String],
+            _libraries: &[String],
+            _send_background: bool,
+        ) -> Result<(), APIFailure> {
+            Ok(())
+        }
+        async fn enrich(&mut self, library_name: &str) -> Result<EnrichrResult, APIFailure> {
+            Ok(EnrichrResult::empty(library_name))
+        }
+        fn get_short_id(&self) -> Option<String> {
+            Some("short_id".to_string())
+        }
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(10))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_enrichment_run() {
+        let mut enrich = Enrichment::new(vec!["gene1".to_string()], vec!["lib1".to_string()]);
+        let mut api = MockEnrichrAPI;
+        enrich.run(&mut api).await.unwrap();
+        assert_eq!(enrich.results.len(), 1);
+        assert_eq!(enrich.results[0].library, "lib1");
+
+        let temp = TempDir::default();
+        let tsv_file = temp.with_file_name(get_timestamp()).with_extension("tsv");
+        let svg_file = temp.with_file_name(get_timestamp()).with_extension("svg");
+        let pdf_file = temp.with_file_name(get_timestamp()).with_extension("pdf");
+        let png_file = temp.with_file_name(get_timestamp()).with_extension("png");
+        assert!(enrich.save_results(tsv_file).is_ok());
+        assert!(
+            enrich
+                .bar_plot(
+                    vec![svg_file, pdf_file, png_file],
+                    Some("lib1".to_string()),
+                    None,
+                    None
+                )
+                .await
+                .is_ok()
+        );
+    }
+
+    #[rstest]
+    fn test_enrichr_result_to_dataframe(#[from(create_test_results)] result: EnrichrResult) {
+        let df = result.to_dataframe().unwrap();
+        assert_eq!(df.height(), 5);
+    }
+
+    #[rstest]
+    fn test_enrichr_result_get_all_rows_as_values(
+        #[from(create_test_results)] result: EnrichrResult,
+    ) {
+        let rows = result.get_all_rows_as_values();
+        assert_eq!(rows.len(), 5);
+        assert_eq!(rows[0].len(), 7);
+    }
+
+    #[rstest]
+    #[case(2)]
+    #[case(3)]
+    #[case(10)]
+    fn test_enrichr_result_get_top_n(
+        #[context] ctx: Context,
+        #[from(create_test_results)] result: EnrichrResult,
+        #[case] n: usize,
+    ) {
+        let top = result.get_top_n(n);
+        let n = if ctx.case == Some(2) {
+            // Test case 2: n is larger than the number of rows
+            // Want to be sure get_top_n() does not add extra rows
+            // Then set n to 5 to make sure the returned top-N the number of rows in result
+            assert_ne!(top.rank.len(), n);
+            5
+        } else {
+            n
+        };
+        assert_eq!(top.rank.len(), n);
+        assert_eq!(top.rank, (1..=n as i32).collect::<Vec<i32>>());
+    }
+
+    #[test]
+    fn test_enrichment_with_background() {
+        let mut enrich = Enrichment::new(vec!["gene1".to_string()], vec!["lib1".to_string()]);
+        assert!(enrich.background.is_none());
+        enrich.with_background(vec!["bg1".to_string()]);
+        assert!(enrich.background.is_some());
+    }
+
+    #[rstest]
+    #[case::red("red", RGBColor(255, 0, 0))]
+    #[case::blue("blue", RGBColor(0, 0, 255))]
+    #[case::white_hex("#FFFFFF", RGBColor(255, 255, 255))]
+    #[case::black_hex("#000000", RGBColor(0, 0, 0))]
+    #[case::default_hex("#GGGGGG", RGBColor(135, 206, 250))]
+    #[case::invalid("#FF", RGBColor(135, 206, 250))]
+    fn test_parse_color(#[case] input: &str, #[case] expected: RGBColor) {
+        assert_eq!(Enrichment::parse_color(input), expected);
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(10))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_enrichr_result_empty() {
+        let libraries = vec!["test_lib".to_string()];
+        let gene_list = vec!["gene1".to_string()];
+        let result = EnrichrResult::empty("test_lib");
+        assert_eq!(result.library, "test_lib");
+        assert_eq!(result.rank.len(), 1);
+        assert_eq!(result.p_value, vec![1.0]);
+
+        let enrich = Enrichment {
+            gene_list,
+            libraries,
+            background: None,
+            results: vec![result],
+        };
+
+        let temp = TempDir::default();
+        let tsv_file = temp.with_file_name(get_timestamp()).with_extension("tsv");
+        let svg_file = temp.with_file_name(get_timestamp()).with_extension("svg");
+        let pdf_file = temp.with_file_name(get_timestamp()).with_extension("pdf");
+        let png_file = temp.with_file_name(get_timestamp()).with_extension("png");
+        assert!(enrich.save_results(tsv_file).is_ok());
+        assert!(
+            enrich
+                .bar_plot(
+                    vec![svg_file, pdf_file, png_file],
+                    Some("test_lib".to_string()),
+                    None,
+                    None
+                )
+                .await
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_enrichr_result_new_from_json_empty() {
+        let json = serde_json::json!([]);
+        let result = EnrichrResult::new_from_json(&json, "lib1");
+        assert_eq!(result.rank.len(), 0);
+        assert_eq!(result.library, "lib1");
+    }
+
+    #[test]
+    fn test_enrichr_result_new_from_json_incomplete_row() {
+        let json = serde_json::json!([[1, "term1"], [2, "term2", 0.05, 1.0, 2.0, ["gene3"], 0.1]]);
+        let result = EnrichrResult::new_from_json(&json, "lib1");
+        assert_eq!(result.rank.len(), 1);
+        assert_eq!(result.rank[0], 2);
+    }
+
+    #[test]
+    fn test_enrichment_new() {
+        let enrich = Enrichment::new(vec!["gene1".to_string()], vec!["lib1".to_string()]);
+        assert_eq!(enrich.gene_list.len(), 1);
+        assert_eq!(enrich.libraries.len(), 1);
+        assert!(enrich.background.is_none());
+        assert_eq!(enrich.results.len(), 0);
+    }
 }

@@ -8,7 +8,7 @@ license = "MIT"
 categories = ["command-line-utilities", "science::bioinformatics"]
 
 [dependencies]
-clap = { version = "4.6", features = ["derive", "wrap_help", "string"] }
+clap = { version = "4.6", features = ["derive", "wrap_help", "string", "env"] }
 indicatif = { version = "0.18", optional = true }
 rand = { version = "0.10", optional = true }
 parasail-rs = { version = "0.9", optional = true }
@@ -19,16 +19,18 @@ md5 = { version = "0.8", optional = true }
 walkdir = { version = "2.5", optional = true }
 rayon = { version = "1.12", optional = true }
 num_cpus = { version = "1.17", optional = true }
-reqwest = { version = "0.13", features = ["json", "form", "multipart"], optional = true }
+reqwest = { version = "0.13", features = ["json", "form", "multipart", "blocking"], optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
+urlencoding = { version = "2.1", optional = true }
+anyhow = { version = "1.0", optional = true }
 plotters-cairo = { version = "0.9", optional = true }
 cairo-rs = { version = "0.22", optional = true, features = ["pdf"] }
 clap-binary-enum = "0.1"
 clap-markdown = "0.1"
 
 [dependencies.polars]
-version = "0.54"
+version = "0.55"
 features = ["lazy", "strings", "concat_str", "timezones", "dtype-array"]
 optional = true
 
@@ -42,7 +44,7 @@ features = ["svg_backend", "bitmap_backend", "ttf", "bitmap_encoder"]
 default = ["base_cmd"]
 enrichment = ["dep:reqwest", "dep:serde", "dep:serde_json", "dep:plotters", "dep:plotters-cairo", "dep:cairo-rs"]
 tcr = ["dep:parasail-rs", "dep:rand"]
-base_cmd = ["dep:indicatif", "dep:regex", "dep:md5", "dep:walkdir", "dep:rayon", "dep:calamine", "dep:tokio", "dep:polars", "dep:num_cpus"]
+base_cmd = ["dep:indicatif", "dep:regex", "dep:md5", "dep:walkdir", "dep:rayon", "dep:calamine", "dep:tokio", "dep:polars", "dep:num_cpus", "dep:reqwest", "dep:serde", "dep:urlencoding", "dep:anyhow"]
 
 [profile.release]
 opt-level = 3
@@ -53,9 +55,10 @@ lto = "thin"
 opt-level = 3
 
 [dev-dependencies]
-polars-testing = "0.54"
+polars-testing = "0.55"
 pretty_assertions = "1.4"
 rstest = "0.26"
 tempfile = "3.27"
 assert_cmd = "2.2"
 rstest_reuse = "0.7"
+temp_testdir = "0.2"

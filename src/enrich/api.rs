@@ -1,9 +1,38 @@
-use crate::enrich::core::{Enrichment, EnrichrResult};
+use crate::enrich::core::EnrichrResult;
 use reqwest;
 use reqwest::multipart;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
+
+pub trait EnrichrAPITrait: Send + Sync {
+    async fn send_genes(
+        &mut self,
+        gene_list: &[String],
+        libraries: &[String],
+        send_background: bool,
+    ) -> Result<(), APIFailure>;
+    async fn enrich(&mut self, library_name: &str) -> Result<EnrichrResult, APIFailure>;
+    fn get_short_id(&self) -> Option<String>;
+}
+
+impl EnrichrAPITrait for EnrichrAPI {
+    async fn send_genes(
+        &mut self,
+        gene_list: &[String],
+        libraries: &[String],
+        send_background: bool,
+    ) -> Result<(), APIFailure> {
+        self.send_genes(gene_list, libraries, send_background).await
+    }
+    async fn enrich(&mut self, library_name: &str) -> Result<EnrichrResult, APIFailure> {
+        let library_name = library_name.to_string();
+        self.enrich(&library_name).await
+    }
+    fn get_short_id(&self) -> Option<String> {
+        self.get_short_id()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListResponse {
@@ -103,8 +132,8 @@ impl EnrichrAPI {
     const BACKGROUND_URL: &'static str = "addbackground";
     const BACKGROUND_ENRICH_URL: &'static str = "backgroundenrich";
 
-    pub fn new(enrichment: Enrichment) -> Self {
-        match enrichment.background {
+    pub fn new(background: Option<Vec<String>>) -> Self {
+        match background {
             Some(_background) => EnrichrAPI {
                 client: reqwest::Client::new(),
                 list_response: None,
@@ -308,5 +337,29 @@ impl EnrichrAPI {
         // }
         //
         // Ok(EnrichrResult::empty(library_name))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::without_short_id("Something went wrong", None, "API Failure: Something went wrong")]
+    #[case::with_short_id(
+        "Enrichment request failed",
+        Some("abc123"),
+        "API Failure: Enrichment request failed\nResults can be found at: https://maayanlab.cloud/Enrichr/enrich?dataset=abc123"
+    )]
+    fn test_api_failure_display(
+        #[case] message: &str,
+        #[case] short_id: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let short_id = short_id.map(String::from);
+        let failure = APIFailure::new(message.to_string(), short_id.as_ref());
+
+        assert_eq!(failure.to_string(), expected);
     }
 }

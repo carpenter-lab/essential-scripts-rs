@@ -2,3 +2,7 @@ coverage:
   range: 60..80
   round: nearest
   precision: 0
+  status:
+    project:
+      default:
+        target: auto
