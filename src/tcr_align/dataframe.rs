@@ -608,7 +608,6 @@ fn create_dual_progress_bar(n_replicates: usize, height: usize) -> (ProgressBar,
 }
 
 struct SingleChainResult {
-    sampled_sequences: Vec<String>,
     self_mean: f64,
     n_seqs: usize,
 }
@@ -617,7 +616,6 @@ impl SingleChainResult {
     fn new(sampled_sequences: Vec<String>, self_mean: f64) -> Self {
         let n_seqs = sampled_sequences.len();
         Self {
-            sampled_sequences,
             self_mean,
             n_seqs,
         }
