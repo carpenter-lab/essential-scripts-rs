@@ -42,7 +42,7 @@ pub(super) fn build_records_from_paths<T: FromPathWithMd5>(
         Ok(pool) => pool.install(|| build(paths)),
         Err(e) => {
             eprintln!("Failed to build rayon pool: {}; falling back", e);
-            build(paths)
+            build_records_from_paths(paths, pb, &false, &1)
         }
     }
 }
