@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v1.0.2...v1.1.0) (2026-09-01)
+
+
+### Features
+
+* new upload to Dryad subcommand ([#51](https://github.com/carpenter-lab/essential-scripts-rs/issues/51)) ([4fd1bad](https://github.com/carpenter-lab/essential-scripts-rs/commit/4fd1bad7c1b3999090e0e9adbbb7078ebcfd36e6))
+
 ## [1.0.2](https://github.com/carpenter-lab/essential-scripts-rs/compare/v1.0.1...v1.0.2) (2026-07-24)
 
 
