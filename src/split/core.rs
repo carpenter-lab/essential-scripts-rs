@@ -163,6 +163,8 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use rstest::rstest;
+    use std::fs;
+    use tempfile::tempdir;
 
     fn expected_split_cdr3a() -> Vec<&'static str> {
         vec![
@@ -392,6 +394,31 @@ mod tests {
         assert!(matches!(schema, GeneSchema::CtGene));
     }
 
+    #[test]
+    fn resolve_gene_schema_errors_with_both_present() {
+        let df = df!(
+            "CDR3a" => ["A"],
+            "CDR3b" => ["B"],
+            "CTgeneA" => ["X;Y"],
+            "CTgeneB" => ["Z"],
+            "TRAV" => ["TRAV2.TRAJ15.TRAC;TRAV12-1.TRAJ31.TRAC"],
+            "TRAJ" => ["TRAJ15"],
+            "TRBV" => ["TRBV20-1.TRBJ1-6.TRBC1"],
+            "TRBJ" => ["TRBJ1-6"],
+        )
+        .expect("failed to create test dataframe");
+
+        let schema = resolve_gene_schema(&df);
+        assert!(
+            schema.is_err(),
+            "both CTgeneA/B and TRAV/TRAJ/TRBV/TRBJ should be rejected"
+        );
+        assert_eq!(
+            schema.err().unwrap().to_string(),
+            "Found both schema styles; provide either CTgeneA/CTgeneB or TRAV/TRAJ/TRBV/TRBJ"
+        );
+    }
+
     #[rstest]
     #[should_panic(
         expected = "CTgene schema should be valid: ComputeError(ErrString(\"Missing required gene columns. Provide either CTgeneA/CTgeneB or TRAV/TRAJ/TRBV/TRBJ\"))"
@@ -437,6 +464,52 @@ mod tests {
         assert!(
             out.is_err(),
             "expected error when CTgeneA/CDR3a split lengths are mismatched"
+        );
+    }
+
+    #[test]
+    fn split_cdr3_seq_main_end_to_end_without_group_column() {
+        let temp = tempdir().expect("failed to create tempdir");
+        let input = temp.path().join("input.csv");
+        let output = temp.path().join("output.csv");
+
+        fs::write(
+            &input,
+            concat!(
+            "CDR3a,CDR3b,TRAV,TRAJ,TRBV,TRBJ,sample\n",
+            "CAVVPPNQAGTALIF;CVVNGGRLMF,CSARSSGTGSSYNSPLHF,TRAV2;TRAV12-1,TRAJ15;TRAJ31,TRBV20-1,TRBJ1-6,s1\n",
+            "CAVNPVGSYIPTF,CSASSAGGTDTQYF,TRAV8-1,TRAJ6,TRBV20-1,TRBJ2-3,s2\n",
+            "CALSGDSGNTGKLIF,CSASKSSYEQYF,TRAV16,TRAJ37,TRBV29-1,TRBJ2-7,s3\n"
+            ),
+        )
+            .expect("failed to write input csv");
+
+        split_cdr3_seq_main(input, output.clone(), None);
+
+        let out = io::read_from_file(output, None)
+            .collect()
+            .expect("failed to read output csv");
+
+        assert_eq!(out.height(), 4);
+        assert!(
+            !out.get_column_names()
+                .iter()
+                .any(|name| name.as_str() == "__row_group"),
+            "temporary row-group column should be removed from output"
+        );
+
+        assert_eq!(
+            col_utf8_values(&out, "CDR3a").unwrap(),
+            expected_split_cdr3a()
+        );
+        assert_eq!(
+            col_utf8_values(&out, "CDR3b").unwrap(),
+            expected_split_cdr3b()
+        );
+        assert_eq!(col_utf8_values(&out, "TRAV").unwrap(), expected_split_va());
+        assert_eq!(
+            col_utf8_values(&out, "sample").unwrap(),
+            vec!["s1", "s1", "s2", "s3"]
         );
     }
 }
