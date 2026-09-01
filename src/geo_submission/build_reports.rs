@@ -21,34 +21,29 @@ pub(super) fn build_records_from_paths<T: FromPathWithMd5>(
     parallel: &bool,
     jobs: &usize,
 ) -> Vec<T> {
-    if *parallel && jobs > &1 {
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(*jobs).build();
-        match pool {
-            Ok(pool) => pool.install(|| {
-                paths
-                    .into_par_iter()
-                    .filter_map(|p| match T::from_path_with_md5(p, pb) {
-                        Ok(rec) => Some(rec),
-                        Err(e) => {
-                            eprintln!("Error building record: {}", e);
-                            None
-                        }
-                    })
-                    .collect()
-            }),
-            Err(e) => {
-                eprintln!("Failed to build rayon pool: {}; falling back", e);
-                paths
-                    .into_par_iter()
-                    .filter_map(|p| T::from_path_with_md5(p, pb).ok())
-                    .collect()
-            }
-        }
-    } else {
+    let build = |paths: Vec<PathBuf>| {
         paths
             .into_par_iter()
-            .filter_map(|p| T::from_path_with_md5(p, pb).ok())
+            .filter_map(|p| match T::from_path_with_md5(p, pb) {
+                Ok(rec) => Some(rec),
+                Err(e) => {
+                    eprintln!("Error building record: {}", e);
+                    None
+                }
+            })
             .collect()
+    };
+
+    if !*parallel || jobs == &1 {
+        return build(paths);
+    }
+
+    match rayon::ThreadPoolBuilder::new().num_threads(*jobs).build() {
+        Ok(pool) => pool.install(|| build(paths)),
+        Err(e) => {
+            eprintln!("Failed to build rayon pool: {}; falling back", e);
+            build(paths)
+        }
     }
 }
 

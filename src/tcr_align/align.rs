@@ -153,11 +153,8 @@ pub fn run_parasail<S: AsRef<str>>(
         for query_seq in a {
             let q_bytes = query_seq.as_ref().as_bytes();
             for ref_seq in b {
-                let r_bytes = ref_seq.as_ref().as_bytes();
-                let result = aligner.align(Some(q_bytes), r_bytes).map_err(|e| {
-                    PolarsError::ComputeError(format!("parasail align failed: {e}").into())
-                })?;
-                sum += i64::from(result.get_score());
+                let result = run_parsail_inner(aligner, q_bytes, ref_seq)?;
+                sum += result;
                 n += 1;
             }
         }
@@ -166,11 +163,8 @@ pub fn run_parasail<S: AsRef<str>>(
         for i in 0..n_a {
             let q_bytes = a[i].as_ref().as_bytes();
             for item in a.iter().take(n_a).skip(i + 1) {
-                let r_bytes = item.as_ref().as_bytes();
-                let result = aligner.align(Some(q_bytes), r_bytes).map_err(|e| {
-                    PolarsError::ComputeError(format!("parasail align failed: {e}").into())
-                })?;
-                sum += i64::from(result.get_score());
+                let result = run_parsail_inner(aligner, q_bytes, item)?;
+                sum += result;
                 n += 1;
             }
         }
@@ -181,6 +175,18 @@ pub fn run_parasail<S: AsRef<str>>(
     } else {
         (sum as f64) / (n as f64)
     })
+}
+
+fn run_parsail_inner<S: AsRef<str>>(
+    aligner: &Aligner,
+    query_bytes: &[u8],
+    item: &S,
+) -> Result<i64, PolarsError> {
+    let r_bytes = item.as_ref().as_bytes();
+    let result = aligner
+        .align(Some(query_bytes), r_bytes)
+        .map_err(|e| PolarsError::ComputeError(format!("parasail align failed: {e}").into()))?;
+    Ok(i64::from(result.get_score()))
 }
 
 #[cfg(test)]
