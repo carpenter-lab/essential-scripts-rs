@@ -57,7 +57,7 @@ opt-level = 3
 [dev-dependencies]
 polars-testing = "0.55"
 pretty_assertions = "1.4"
-rstest = "0.26"
+rstest = "0.27"
 tempfile = "3.27"
 assert_cmd = "2.2"
 rstest_reuse = "0.7"
