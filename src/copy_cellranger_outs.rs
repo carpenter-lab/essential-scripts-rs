@@ -1,4 +1,5 @@
-use clap::{Args, Error, Subcommand};
+use anyhow::{Context, Result};
+use clap::{Args, Subcommand};
 use std::fs;
 use std::io;
 use std::io::ErrorKind;
@@ -82,7 +83,7 @@ pub enum Commands {
     },
 }
 
-pub fn handle_command(cmd: Commands) -> Result<(), Error> {
+pub fn handle_command(cmd: Commands) -> Result<()> {
     match cmd {
         Commands::CopyCellRangerOuts {
             base_path,
@@ -90,17 +91,10 @@ pub fn handle_command(cmd: Commands) -> Result<(), Error> {
             pipestance_results,
             check,
         } => {
-            if let Err(e) = copy_cellranger_outs_main(
-                &base_path,
-                Option::from(&dest),
-                &pipestance_results,
-                check,
-            ) {
-                return Err(e.into());
-            }
-            Ok(())
+            copy_cellranger_outs_main(&base_path, Option::from(&dest), &pipestance_results, check)?
         }
-    }
+    };
+    Ok(())
 }
 
 pub fn copy_cellranger_outs_main(
@@ -108,7 +102,7 @@ pub fn copy_cellranger_outs_main(
     dest: Option<&PathBuf>,
     outs: &PipestanceResults,
     check: bool,
-) -> io::Result<CopyStats> {
+) -> Result<CopyStats> {
     let mut stats = CopyStats::default();
     // If in check-only mode, validate pipestances and exit
     if check {
@@ -118,37 +112,26 @@ pub fn copy_cellranger_outs_main(
     let PipestanceResults { h5, mex, vdj } = outs;
 
     if !h5 && !mex && !vdj {
-        return Err(io::Error::new(
+        Err(io::Error::new(
             ErrorKind::InvalidInput,
             "Nothing to do: specify at least one of --h5, --mex, --vdj",
-        ));
+        ))?
     }
 
     let Some(dest) = dest else {
-        return Err(io::Error::new(
+        Err(io::Error::new(
             ErrorKind::InvalidInput,
             "Missing destination path",
-        ));
+        ))?
     };
 
     // Ensure destination exists
-    if let Err(e) = fs::create_dir_all(dest) {
-        return Err(io::Error::new(
-            e.kind(),
-            format!(
-                "Failed to create destination directory {}: {}",
-                dest.display(),
-                e
-            ),
-        ));
-    }
-    let entries = fs::read_dir(base_path).map_err(|e| {
-        io::Error::new(
-            e.kind(),
-            format!(
-                "Base path does not exist or cannot be read: {}",
-                base_path.display()
-            ),
+    fs::create_dir_all(dest)
+        .with_context(|| format!("Failed to create destination directory {}", dest.display()))?;
+    let entries = fs::read_dir(base_path).with_context(|| {
+        format!(
+            "Base path does not exist or cannot be read: {}",
+            base_path.display()
         )
     })?;
     for entry in entries.flatten() {
@@ -191,7 +174,7 @@ fn has_mri_tgz(pipestance_dir: &Path) -> io::Result<bool> {
     Ok(ok)
 }
 
-pub(crate) fn check_pipestances(base_path: &Path) -> io::Result<usize> {
+pub(crate) fn check_pipestances(base_path: &Path) -> Result<usize> {
     let entries = fs::read_dir(base_path)?;
     let mut total = 0usize;
     let mut ok_count = 0usize;
@@ -221,19 +204,19 @@ pub(crate) fn check_pipestances(base_path: &Path) -> io::Result<usize> {
         total - ok_count
     );
     if total == 0 {
-        Err(io::Error::new(ErrorKind::NotFound, "No pipestances found"))
+        Err(anyhow::anyhow!("No pipestances found"))
     } else if total != ok_count {
-        Err(io::Error::other(format!(
+        Err(anyhow::anyhow!(
             "Some pipestances failed validation: {} OK, {} missing",
             ok_count,
             total - ok_count
-        )))
+        ))
     } else {
         Ok(ok_count)
     }
 }
 
-pub fn list_samples(pipestance_dir: &Path) -> io::Result<Vec<PathBuf>> {
+pub fn list_samples(pipestance_dir: &Path) -> Result<Vec<PathBuf>> {
     let base = pipestance_dir.join(PATH_TO_OUTS);
     let mut samples = Vec::new();
     if base.is_dir() {
@@ -267,7 +250,7 @@ fn copy_outputs_for_pipestance(
     h5: bool,
     mex: bool,
     vdj: bool,
-) -> io::Result<CopyStats> {
+) -> Result<CopyStats> {
     let mut stats = CopyStats::default();
 
     for sample_dir in list_samples(pipestance_dir)? {

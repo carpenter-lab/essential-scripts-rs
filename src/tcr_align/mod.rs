@@ -5,6 +5,7 @@ mod core;
 #[cfg(feature = "tcr")]
 mod dataframe;
 
+use anyhow::Result;
 use clap::{Error, Subcommand};
 use std::path::PathBuf;
 
@@ -30,7 +31,7 @@ pub enum Commands {
     },
 }
 
-pub fn handle_command(cmd: Commands) -> Result<(), Error> {
+pub fn handle_command(cmd: Commands) -> Result<()> {
     #[cfg(feature = "tcr")]
     match cmd {
         Commands::ScoreTCRAlignments {
@@ -51,16 +52,15 @@ pub fn handle_command(cmd: Commands) -> Result<(), Error> {
                 )
             })?;
 
-            core::tcr_score(input_file, output_file, replicates);
-            Ok(())
+            core::tcr_score(input_file, output_file, replicates)
         }
     }
     #[cfg(not(feature = "tcr"))]
     match cmd {
-        Commands::ScoreTCRAlignments { .. } => Err(Error::raw(
+        Commands::ScoreTCRAlignments { .. } => Err(anyhow::Error::new(Error::raw(
             clap::error::ErrorKind::MissingSubcommand,
             "This command requires the `tcr` feature. Rebuild with `--features tcr`",
-        )),
+        ))),
     }
 }
 
@@ -78,7 +78,10 @@ mod tests {
         };
 
         let err = handle_command(cmd).expect_err("expected missing input_file error");
-        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        assert_eq!(
+            crate::underlying_clap_error_kind(&err),
+            Some(clap::error::ErrorKind::MissingRequiredArgument)
+        );
     }
 
     #[cfg(feature = "tcr")]
@@ -91,7 +94,10 @@ mod tests {
         };
 
         let err = handle_command(cmd).expect_err("expected missing output_file error");
-        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        assert_eq!(
+            crate::underlying_clap_error_kind(&err),
+            Some(clap::error::ErrorKind::MissingRequiredArgument)
+        );
     }
 
     #[cfg(not(feature = "tcr"))]
@@ -104,6 +110,9 @@ mod tests {
         };
 
         let err = handle_command(cmd).expect_err("expected feature-gated error");
-        assert_eq!(err.kind(), clap::error::ErrorKind::MissingSubcommand);
+        assert_eq!(
+            crate::underlying_clap_error_kind(&err),
+            Some(clap::error::ErrorKind::MissingSubcommand)
+        );
     }
 }

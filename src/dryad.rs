@@ -1,4 +1,4 @@
-use anyhow::{Context, anyhow};
+use anyhow::{Context, Result, anyhow};
 use clap::Subcommand;
 use reqwest::blocking::{Body, Client, Response};
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
@@ -32,15 +32,14 @@ pub enum Commands {
     },
 }
 
-pub fn handle_command(cmd: Commands) -> Result<(), clap::Error> {
+pub fn handle_command(cmd: Commands) -> Result<()> {
     match cmd {
         Commands::DryadUpload {
             client_id,
             client_secret,
             doi,
             directory,
-        } => upload_to_dryad(&client_id, &client_secret, &directory, &doi)
-            .map_err(|e| clap::Error::raw(clap::error::ErrorKind::Io, e.to_string())),
+        } => upload_to_dryad(&client_id, &client_secret, &directory, &doi),
     }
 }
 
@@ -58,10 +57,7 @@ struct TokenResponse {
 }
 
 impl DryadClient {
-    pub fn new(
-        client_id: impl Into<String>,
-        client_secret: impl Into<String>,
-    ) -> anyhow::Result<Self> {
+    pub fn new(client_id: impl Into<String>, client_secret: impl Into<String>) -> Result<Self> {
         let mut client = Self {
             client_id: client_id.into(),
             client_secret: client_secret.into(),
@@ -72,12 +68,12 @@ impl DryadClient {
         Ok(client)
     }
 
-    fn refresh_token(&mut self) -> anyhow::Result<()> {
+    fn refresh_token(&mut self) -> Result<()> {
         self.token = self.get_token()?;
         Ok(())
     }
 
-    fn get_token(&self) -> anyhow::Result<String> {
+    fn get_token(&self) -> Result<String> {
         let response = self
             .http
             .post(DryadApiConfig::TOKEN_URL)
@@ -97,12 +93,7 @@ impl DryadClient {
         Ok(token.access_token)
     }
 
-    fn authorized_put(
-        &self,
-        url: &str,
-        content_type: &str,
-        file: File,
-    ) -> anyhow::Result<Response> {
+    fn authorized_put(&self, url: &str, content_type: &str, file: File) -> Result<Response> {
         self.http
             .put(url)
             .header(AUTHORIZATION, format!("Bearer {}", self.token))
@@ -113,7 +104,7 @@ impl DryadClient {
             .context("failed to upload file")
     }
 
-    fn upload_single_file(&mut self, file: &Path, doi_encoded: &str) -> anyhow::Result<()> {
+    fn upload_single_file(&mut self, file: &Path, doi_encoded: &str) -> Result<()> {
         let file_name = file
             .file_name()
             .and_then(|s| s.to_str())
@@ -146,7 +137,7 @@ impl DryadClient {
         Ok(())
     }
 
-    pub fn upload_files(&mut self, files: &[FilePath], doi: &str) -> anyhow::Result<()> {
+    pub fn upload_files(&mut self, files: &[FilePath], doi: &str) -> Result<()> {
         let doi_encoded = Self::encode(doi);
         for file in files {
             self.upload_single_file(file, &doi_encoded)?;
@@ -159,7 +150,7 @@ impl DryadClient {
     }
 }
 
-fn detect_mime_type(path: &Path) -> anyhow::Result<&'static str> {
+fn detect_mime_type(path: &Path) -> Result<&'static str> {
     let file_name = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -185,7 +176,7 @@ pub fn upload_to_dryad(
     client_secret: &str,
     directory: &Path,
     doi: &str,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let files: Vec<PathBuf> = std::fs::read_dir(directory)
         .with_context(|| format!("failed to read directory {}", directory.display()))?
         .filter_map(|entry| entry.ok().map(|e| e.path()))

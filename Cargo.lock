@@ -1052,6 +1052,7 @@ dependencies = [
  "serde_json",
  "temp_testdir",
  "tempfile",
+ "thiserror",
  "tokio",
  "urlencoding",
  "walkdir",

@@ -1,7 +1,8 @@
+use crate::progress::{Progress, dual_progress_bars};
 use crate::tcr_align::align::{build_protein_aligner, run_parasail};
-use indicatif::{ProgressBar, ProgressStyle};
+use anyhow::{Context, Result};
+use indicatif::ProgressBar;
 use parasail_rs::aligner::Aligner;
-use polars::error::PolarsResult;
 use polars::frame::{DataFrame, UniqueKeepStrategy};
 use polars::prelude::{ExplodeOptions, IntoLazy, NamedFrom, Series, col, len, lit};
 use rand::SeedableRng;
@@ -68,7 +69,7 @@ struct ScoreContext<'a> {
 ///
 /// assert_eq!(result, vec!["CDR3A1", "CDR3A2", "CDR3A3", "CDR3A4"]);
 /// ```
-pub(crate) fn all_unique_cdr3_alpha(all_data: &DataFrame) -> PolarsResult<Vec<String>> {
+pub(crate) fn all_unique_cdr3_alpha(all_data: &DataFrame) -> Result<Vec<String>> {
     let lf = all_data.clone().lazy();
     let unique_df = lf
         .select([col("TcRa")])
@@ -76,7 +77,7 @@ pub(crate) fn all_unique_cdr3_alpha(all_data: &DataFrame) -> PolarsResult<Vec<St
         .explode(
             col("TcRa_list")
                 .into_selector()
-                .expect("could not create selector"),
+                .context("could not create selector for TcRa list")?,
             ExplodeOptions {
                 empty_as_null: false,
                 keep_nulls: true,
@@ -150,7 +151,7 @@ pub(crate) fn all_unique_cdr3_alpha(all_data: &DataFrame) -> PolarsResult<Vec<St
 ///
 /// The resulting `DataFrame` will contain grouped and transformed data based
 /// on the described logic.
-pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> PolarsResult<DataFrame> {
+pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> Result<DataFrame> {
     let lf = all_data
         .clone()
         .lazy()
@@ -161,7 +162,7 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> PolarsResult<Data
         .explode(
             col("TcRa_list")
                 .into_selector()
-                .expect("could not create selector"),
+                .context("could not create selector for TcRa list")?,
             ExplodeOptions {
                 empty_as_null: false,
                 keep_nulls: true,
@@ -170,7 +171,7 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> PolarsResult<Data
         .drop(
             col("TcRa")
                 .into_selector()
-                .expect("could not create selector"),
+                .context("could not create selector for TcRa")?,
         )
         .rename(["TcRa_list"], ["TcRa"], true)
         .filter(col("TcRa").is_not_null())
@@ -179,7 +180,7 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> PolarsResult<Data
         .explode(
             col("TcRb_list")
                 .into_selector()
-                .expect("could not create selector"),
+                .context("could not create selector for TcRb list")?,
             ExplodeOptions {
                 empty_as_null: false,
                 keep_nulls: true,
@@ -188,7 +189,7 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> PolarsResult<Data
         .drop(
             col("TcRb")
                 .into_selector()
-                .expect("could not create selector"),
+                .context("could not create selector for TcRb")?,
         )
         .rename(["TcRb_list"], ["TcRb"], true)
         // dedupe pairs after explosion (like distinct())
@@ -205,7 +206,9 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> PolarsResult<Data
         // keep groups with at least one member
         .filter(col("n").gt(lit(0)));
 
-    grouped.collect()
+    grouped
+        .collect()
+        .context("Failed to collect grouped DataFrame in `prepare_parasail_groups`")
 }
 
 /// Extracts a unique, trimmed, and non-empty list of UTF-8 strings from a `List` cell
@@ -251,12 +254,17 @@ fn get_list_cell_as_vec_utf8(
     df: &DataFrame,
     col_name: &str,
     row_idx: usize,
-) -> PolarsResult<Vec<String>> {
+) -> Result<Vec<String>> {
     let s = df
         .column(col_name)?
         .list()?
         .get_as_series(row_idx)
-        .expect("could not extract series");
+        .with_context(|| {
+            format!(
+                "could not extract series from column '{}' at row {}",
+                col_name, row_idx
+            )
+        })?;
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
 
@@ -333,13 +341,13 @@ pub(crate) fn fraction_self_greater(
     n_replicates: usize,
     gap_open: i32,
     gap_extend: i32,
-) -> PolarsResult<DataFrame> {
+) -> Result<DataFrame> {
     let height = groups.height();
 
     let patterns: Vec<String> = groups
         .column("pattern")?
         .as_series()
-        .expect("could not get 'pattern' column")
+        .context("could not get 'pattern' column")?
         .str()?
         .iter()
         .flatten()
@@ -373,6 +381,7 @@ pub(crate) fn fraction_self_greater(
         Series::new("TcRb_alignment_score".into(), out_self_b).into(),
         Series::new("TcRa_alignment_score_v_background".into(), out_frac).into(),
     ])
+    .context("Failed to create output DataFrame with alignment scores and fractions")
 }
 
 fn downsample_vec(
@@ -511,7 +520,8 @@ fn calculate_scores(
     rng: &mut SmallRng,
 ) {
     let height = groups.height();
-    let (pb, inner_pb) = create_dual_progress_bar(n_replicates, height);
+    let (pb, inner_pb) = dual_progress_bars(n_replicates as u64, height as u64, Progress::Progress)
+        .expect("Failed to create dual progress bars in `calculate_scores`");
 
     let aligner = match build_protein_aligner(gap_open, gap_extend) {
         Ok(aligner) => aligner,
@@ -577,36 +587,6 @@ fn calculate_scores(
     }
 }
 
-fn create_dual_progress_bar(n_replicates: usize, height: usize) -> (ProgressBar, ProgressBar) {
-    let progress_style = ProgressStyle::with_template(
-        "{msg} [{bar:40.cyan/blue}] {pos}/{len} Elapsed: {elapsed_precise} ETA: {eta}",
-    );
-    let inner_progress_style =
-        ProgressStyle::with_template("\x1b[37m{msg}\x1b[0m [{bar:40.cyan/blue}] {pos}/{len}");
-    let mpb: indicatif::MultiProgress;
-    let pb: ProgressBar;
-    let inner_pb: ProgressBar;
-
-    if let Ok(progress_style) = progress_style {
-        mpb = indicatif::MultiProgress::new();
-        pb = mpb.add(ProgressBar::new(height as u64));
-        pb.set_style(progress_style);
-        match inner_progress_style {
-            Ok(inner_progress_style) => {
-                inner_pb = mpb.add(ProgressBar::new(n_replicates as u64));
-                inner_pb.set_style(inner_progress_style);
-            }
-            Err(_) => {
-                inner_pb = ProgressBar::hidden();
-            }
-        }
-    } else {
-        pb = ProgressBar::hidden();
-        inner_pb = ProgressBar::hidden();
-    }
-    (pb, inner_pb)
-}
-
 struct SingleChainResult {
     self_mean: f64,
     n_seqs: usize,
@@ -615,10 +595,7 @@ struct SingleChainResult {
 impl SingleChainResult {
     fn new(sampled_sequences: Vec<String>, self_mean: f64) -> Self {
         let n_seqs = sampled_sequences.len();
-        Self {
-            self_mean,
-            n_seqs,
-        }
+        Self { self_mean, n_seqs }
     }
 
     fn is_nan(&self) -> bool {

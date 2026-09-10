@@ -1,5 +1,6 @@
 use crate::io;
 use crate::io::WriteToCsvOrStdout;
+use anyhow::{Context, Result};
 use polars::error::{PolarsError, PolarsResult};
 use polars::frame::DataFrame;
 use polars::prelude::*;
@@ -99,11 +100,10 @@ pub(crate) fn split_cdr3_seq_main(
     input_file: PathBuf,
     output_file: PathBuf,
     group: Option<&Vec<String>>,
-) {
-    let lazy_df: LazyFrame = io::read_from_file(input_file, None);
-    let mut df = lazy_df
-        .collect()
-        .expect("Failed to collect initial dataframe");
+) -> Result<()> {
+    let lazy_df: LazyFrame =
+        io::read_from_file(input_file, None).context("Failed to read input file")?;
+    let mut df = PolarsContext::context(lazy_df.collect(), "Failed to collect initial dataframe")?;
     let gene_schema = resolve_gene_schema(&df).expect("Invalid gene column schema");
 
     // Keep CLI compatibility and fail early on typos in group column names.
@@ -120,13 +120,18 @@ pub(crate) fn split_cdr3_seq_main(
         // One unique group per original row.
         // This keeps alpha/beta splits anchored to original rows.
         let row_ids: Vec<u64> = (0..df.height() as u64).collect();
-        df.with_column(Series::new("__row_group".into(), row_ids).into())
-            .expect("Failed to add per-row fallback group");
+        PolarsContext::context(
+            df.with_column(Series::new("__row_group".into(), row_ids).into()),
+            "Failed to add per-row fallback group",
+        )?;
     }
 
     // Process both chains
     for chain in ["alpha", "beta"] {
-        df = split_cdr3_seq(df, chain, gene_schema).expect("Failed to split CDR3 sequences");
+        df = Context::context(
+            split_cdr3_seq(df, chain, gene_schema),
+            "Failed to split CDR3 sequences",
+        )?;
     }
 
     // Write output
@@ -136,15 +141,20 @@ pub(crate) fn split_cdr3_seq_main(
             .iter()
             .any(|n| n.as_str() == "__row_group")
     {
-        df = df
-            .drop("__row_group")
-            .expect("Failed to drop temporary row group column");
+        df = Context::context(
+            df.drop("__row_group"),
+            "Failed to drop temporary row group column",
+        )?;
     }
-    df.write_to_flat_or_stdout(output_file, None);
+    df.write_to_flat_or_stdout(output_file, None)
 }
 
-pub(crate) fn split_sample_id(input_file: PathBuf, output_file: PathBuf, column_name: &String) {
-    let df = io::read_from_file(input_file, None);
+pub(crate) fn split_sample_id(
+    input_file: PathBuf,
+    output_file: PathBuf,
+    column_name: &String,
+) -> Result<()> {
+    let df = io::read_from_file(input_file, None).context("Failed to read input file")?;
     let df = df
         .with_column(col(column_name).str().split(lit(":")))
         .with_columns([
@@ -153,9 +163,8 @@ pub(crate) fn split_sample_id(input_file: PathBuf, output_file: PathBuf, column_
         ])
         .select([all().exclude_cols([column_name]).as_expr()]);
 
-    df.collect()
-        .expect("Failed to collect dataframe")
-        .write_to_flat_or_stdout(output_file, None);
+    Context::context(df.collect(), "Failed to collect dataframe")?
+        .write_to_flat_or_stdout(output_file, None)
 }
 
 #[cfg(test)]
@@ -484,9 +493,10 @@ mod tests {
         )
             .expect("failed to write input csv");
 
-        split_cdr3_seq_main(input, output.clone(), None);
+        split_cdr3_seq_main(input, output.clone(), None).unwrap();
 
         let out = io::read_from_file(output, None)
+            .unwrap()
             .collect()
             .expect("failed to read output csv");
 

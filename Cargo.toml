@@ -28,6 +28,7 @@ plotters-cairo = { version = "0.9", optional = true }
 cairo-rs = { version = "0.22", optional = true, features = ["pdf"] }
 clap-binary-enum = "0.1"
 clap-markdown = "0.1"
+thiserror = "2.0.18"
 
 [dependencies.polars]
 version = "0.55"

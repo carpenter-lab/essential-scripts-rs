@@ -1,8 +1,10 @@
+use clap::CommandFactory;
 use clap::{Parser, Subcommand};
 mod docs;
 
 use essential_scripts_rs::{
     aggregate, copy_cellranger_outs, dryad, enrich, geo_submission, plate_reader, split, tcr_align,
+    underlying_clap_error_kind,
 };
 
 #[derive(Parser)]
@@ -42,24 +44,6 @@ enum Commands {
     Dryad(dryad::Commands),
 }
 
-macro_rules! exit_on_error_feature_subcommand {
-    ($cli:ty, $expr:expr) => {
-        if let Err(err) = $expr {
-            match err.kind() {
-                clap::error::ErrorKind::MissingSubcommand => {
-                    let mut c = <$cli as clap::CommandFactory>::command();
-                    c.error(
-                        clap::error::ErrorKind::MissingSubcommand,
-                        err.to_string().replace("error: ", ""),
-                    )
-                    .exit();
-                }
-                _ => err.exit(),
-            }
-        }
-    };
-}
-
 #[cfg(feature = "base_cmd")]
 pub(crate) fn main_helper(cli: Cli) {
     let result = match cli.command {
@@ -73,8 +57,22 @@ pub(crate) fn main_helper(cli: Cli) {
         Some(Commands::Dryad(cmd)) => dryad::handle_command(cmd),
         None => Ok(()),
     };
-
-    exit_on_error_feature_subcommand!(Cli, result);
+    if let Err(err) = result {
+        match underlying_clap_error_kind(&err) {
+            Some(clap::error::ErrorKind::MissingSubcommand) => {
+                let mut c = Cli::command();
+                c.error(
+                    clap::error::ErrorKind::MissingSubcommand,
+                    err.to_string().replace("error: ", ""),
+                )
+                .exit();
+            }
+            _ => {
+                eprintln!("{err}");
+                std::process::exit(1)
+            }
+        }
+    }
 }
 
 #[cfg(not(feature = "base_cmd"))]

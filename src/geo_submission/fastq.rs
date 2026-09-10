@@ -1,13 +1,14 @@
+use crate::geo_submission::build_reports;
 use crate::geo_submission::build_reports::prepare_paths_report;
-use crate::geo_submission::helper::make_progress_bar;
 use crate::geo_submission::traits::*;
-use crate::geo_submission::{Progress, build_reports};
-use indicatif::ProgressBar;
+use crate::progress::byte_and_file_progress_bar;
+use crate::progress::{FileByteProgress, Progress};
+use anyhow::{Result, bail};
 use regex::Regex;
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::{fs, io};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
@@ -44,7 +45,7 @@ impl HasPath for &FastqFile {
 impl FromPathWithMd5 for FastqFile {
     fn from_path_with_md5(
         path: PathBuf,
-        pb: Option<&Arc<ProgressBar>>,
+        pb: Option<&Arc<FileByteProgress>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let filename = path
             .file_name()
@@ -153,7 +154,7 @@ fn scan_fastq_directories(
     parallel: &bool,
     jobs: &usize,
     progress: Progress,
-) -> Result<Vec<FastqFile>, Box<dyn std::error::Error>> {
+) -> Result<Vec<FastqFile>> {
     let mut fastq_paths = Vec::new();
 
     for d in dirs {
@@ -178,7 +179,7 @@ fn scan_fastq_directories(
         .map(|path| fs::metadata(path).map_or(0, |m| m.len()))
         .sum();
 
-    let pb = make_progress_bar(total_bytes, progress)?;
+    let pb = byte_and_file_progress_bar(total_bytes, fastq_paths.len(), progress)?;
     let mut fastq_files: Vec<FastqFile> =
         build_reports::build_records_from_paths(fastq_paths, Some(&pb), parallel, jobs);
     fastq_files.sort_by(|a, b| {
@@ -215,53 +216,46 @@ pub(super) fn match_fastq(
     parallel_md5: &bool,
     jobs: &usize,
     progress: Option<Progress>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     let progress = progress.unwrap_or(Progress::Progress);
 
-    match scan_fastq_directories(input_directories, parallel_md5, jobs, progress) {
-        Ok(fastq_files) => {
-            if fastq_files.is_empty() {
-                let err_msg = format!(
-                    "No FastQ files found in directories: {}",
-                    input_directories
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-                return Err(io::Error::new(io::ErrorKind::NotFound, err_msg.as_str()).into());
-            }
+    let fastq_files = scan_fastq_directories(input_directories, parallel_md5, jobs, progress)?;
 
-            println!(
-                "Found {} FastQ files in {}",
-                fastq_files.len(),
-                input_directories
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-
-            // Group by (sample, lane)
-            let lane_groups = group_by_lane(&fastq_files);
-            let paired_report = generate_paired_report(&lane_groups);
-            build_reports::write_output(&paired_report, paired_output)?;
-
-            // Group by sample only
-            let sample_groups = group_by_sample(&fastq_files);
-            let sample_report = generate_sample_report(&sample_groups);
-            build_reports::write_output(&sample_report, sample_output)?;
-
-            // MD5 manifest
-            let md5_report = build_reports::generate_md5_report(&fastq_files);
-            build_reports::write_output(&md5_report, md5_output)?;
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("Error scanning directory: {e}");
-            Err(e)
-        }
+    if fastq_files.is_empty() {
+        let err_msg = format!(
+            "No FastQ files found in directories: {}",
+            input_directories
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        bail!(err_msg);
     }
+
+    println!(
+        "Found {} FastQ files in {}",
+        fastq_files.len(),
+        input_directories
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    // Group by (sample, lane)
+    let lane_groups = group_by_lane(&fastq_files);
+    let paired_report = generate_paired_report(&lane_groups);
+    build_reports::write_output(&paired_report, paired_output)?;
+
+    // Group by sample only
+    let sample_groups = group_by_sample(&fastq_files);
+    let sample_report = generate_sample_report(&sample_groups);
+    build_reports::write_output(&sample_report, sample_output)?;
+
+    // MD5 manifest
+    let md5_report = build_reports::generate_md5_report(&fastq_files);
+    build_reports::write_output(&md5_report, md5_output)
 }
 
 #[cfg(test)]

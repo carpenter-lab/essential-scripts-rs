@@ -12,20 +12,14 @@ mod traits;
 #[cfg(test)]
 mod test;
 
+use crate::progress::ProgressArg;
+use anyhow::Result;
 use clap::builder::RangedI64ValueParser;
-use clap::{Args, Error, Subcommand};
-use clap_binary_enum::YesNoArg;
+use clap::{Args, Subcommand};
 #[cfg(feature = "base_cmd")]
 use fastq::*;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, YesNoArg)]
-pub enum Progress {
-    #[yesno(help = "Show progress bar")]
-    Progress,
-    #[yesno(help = "Hide progress bar")]
-    NoProgress,
-}
 #[cfg(test)]
 fn num_cpu() -> usize {
     4
@@ -99,7 +93,7 @@ pub enum Commands {
 }
 
 #[cfg(feature = "base_cmd")]
-pub fn handle_command(cmd: &Commands) -> Result<(), Error> {
+pub fn handle_command(cmd: &Commands) -> Result<()> {
     match cmd {
         Commands::GeoFastq {
             input_directories,
@@ -121,13 +115,6 @@ pub fn handle_command(cmd: &Commands) -> Result<(), Error> {
                 &jobs,
                 generate_args.progress.get(),
             )
-            .map_err(|e| {
-                Error::raw(
-                    clap::error::ErrorKind::Io,
-                    format!("Error matching FastQ files: {}", e),
-                )
-            })?;
-            Ok(())
         }
     }
 }
