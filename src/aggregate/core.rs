@@ -1,5 +1,6 @@
 use crate::io;
 use crate::io::WriteToCsvOrStdout;
+use anyhow::{Context, Result};
 use polars::prelude::*;
 use std::path::PathBuf;
 
@@ -101,7 +102,7 @@ pub(crate) fn aggregate_cellranger_tcr_output(
     input_files: Vec<PathBuf>,
     output_file: PathBuf,
     keep_alpha: bool,
-) {
+) -> Result<()> {
     let concat_args = UnionArgs {
         parallel: true,
         rechunk: true,
@@ -117,17 +118,19 @@ pub(crate) fn aggregate_cellranger_tcr_output(
 
     for input_file in input_files {
         let df = io::read_from_file(input_file, None);
-        dfs.push(df.with_streaming(true));
+        dfs.push(df?.with_streaming(true));
     }
 
-    let concatenated = concat(&dfs, concat_args)
-        .expect("Failed to concatenate input files")
-        .with_streaming(true);
+    let concatenated = Context::context(
+        concat(&dfs, concat_args),
+        "Failed to concatenate input files",
+    )?
+    .with_streaming(true);
     let processed = process_input_lazy(concatenated, keep_alpha)
         .filter(col("CDR3b").is_not_null())
         .filter(col("CDR3b").neq(lit("")));
 
-    processed.write_to_csv_or_stdout(output_file);
+    processed.write_to_csv_or_stdout(output_file)
 }
 
 #[cfg(test)]

@@ -1,4 +1,5 @@
-use clap::{Error, Subcommand};
+use anyhow::Result;
+use clap::Subcommand;
 use std::path::PathBuf;
 
 #[cfg(feature = "base_cmd")]
@@ -58,7 +59,7 @@ pub enum Commands {
 }
 
 #[cfg(feature = "base_cmd")]
-pub fn handle_command(cmd: Commands) -> Result<(), Error> {
+pub fn handle_command(cmd: Commands) -> Result<()> {
     match cmd {
         Commands::SplitSampleId {
             input_file,
@@ -66,15 +67,16 @@ pub fn handle_command(cmd: Commands) -> Result<(), Error> {
             column_name,
         } => {
             #[cfg(feature = "base_cmd")]
-            core::split_sample_id(input_file, output_file, &column_name);
+            core::split_sample_id(input_file, output_file, &column_name)?;
         }
         Commands::SplitCdr3Seq {
             input_file,
             output_file,
             group,
-        } => {
+        } =>
+        {
             #[cfg(feature = "base_cmd")]
-            core::split_cdr3_seq_main(input_file, output_file, group.as_ref());
+            core::split_cdr3_seq_main(input_file, output_file, group.as_ref())?
         }
     }
     Ok(())

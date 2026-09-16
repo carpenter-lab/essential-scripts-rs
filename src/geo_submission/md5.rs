@@ -1,4 +1,4 @@
-use indicatif::ProgressBar;
+use crate::progress::FileByteProgress;
 use md5;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -8,7 +8,7 @@ use std::sync::Arc;
 /// Compute MD5 and increment a progress bar by the number of bytes read
 pub(crate) fn compute_md5_with_progress(
     path: &Path,
-    pb: Option<&Arc<ProgressBar>>,
+    pb: Option<&Arc<FileByteProgress>>,
 ) -> Result<String, std::io::Error> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
@@ -21,16 +21,20 @@ pub(crate) fn compute_md5_with_progress(
         }
         ctx.consume(&buffer[..n]);
         if let Some(pb) = pb {
-            pb.inc(n as u64);
+            pb.inc_bytes(n as u64);
         }
     }
     let digest = ctx.finalize();
+    if let Some(pb) = pb {
+        pb.inc_file();
+    }
     Ok(format!("{digest:x}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progress::{Progress, byte_and_file_progress_bar};
     use rstest::{Context, fixture, rstest};
     use std::fs::File;
     use std::io::Write;
@@ -72,7 +76,8 @@ mod tests {
         let content = b"test content";
         let path = create_test_file(&temp_dir, context.name, content);
 
-        let pb = Arc::new(ProgressBar::new(content.len() as u64));
+        let pb = byte_and_file_progress_bar(content.len() as u64, 1, Progress::Progress)
+            .expect("Failed to create progress bar");
         let result = compute_md5_with_progress(&path, Some(&pb));
 
         assert!(result.is_ok());
@@ -93,7 +98,8 @@ mod tests {
         let content = vec![0u8; 16 * 1024 * 1024]; // 16 MiB
         let path = create_test_file(&temp_dir, context.name, &content);
 
-        let pb = Arc::new(ProgressBar::new(content.len() as u64));
+        let pb = byte_and_file_progress_bar(content.len() as u64, 1, Progress::Progress)
+            .expect("Failed to create progress bar");
         let result = compute_md5_with_progress(&path, Some(&pb));
 
         assert!(result.is_ok());

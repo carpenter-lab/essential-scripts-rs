@@ -1,3 +1,4 @@
+use anyhow::{Context as AnyhowContext, Result};
 use calamine::{Reader, Xlsx, open_workbook};
 use polars::prelude::*;
 use std::num::NonZero;
@@ -8,29 +9,38 @@ fn get_extension_from_filename(filename: &PathBuf) -> Option<&str> {
     Path::new(filename).extension().and_then(|s| s.to_str())
 }
 
-fn write_df_output(df: &mut DataFrame, output_file: &PathBuf, separator: u8) {
+fn write_df_output(df: &mut DataFrame, output_file: &PathBuf, separator: u8) -> Result<()> {
     if output_file == Path::new("-") {
         let stdout = std::io::stdout();
-        let output = stdout.lock();
-        CsvWriter::new(output)
-            .with_separator(separator)
-            .finish(df)
-            .expect("Failed to write to stdout");
+        let mut output = stdout.lock();
+        AnyhowContext::context(
+            CsvWriter::new(&mut output)
+                .with_separator(separator)
+                .finish(df),
+            "Failed to write to stdout",
+        )?;
     } else {
-        let output = std::fs::File::create(output_file).expect("Failed to create output file");
-        CsvWriter::new(output)
-            .with_separator(separator)
-            .finish(df)
-            .expect("Failed to write to file");
+        let mut output = AnyhowContext::context(
+            std::fs::File::create(output_file),
+            "Failed to create output file",
+        )?;
+        AnyhowContext::context(
+            CsvWriter::new(&mut output)
+                .with_separator(separator)
+                .finish(df),
+            "Failed to write to file",
+        )?;
     }
+    Ok(())
 }
 
-fn write_lazy_output(lf: LazyFrame, output_file: PathBuf, separator: u8) {
+fn write_lazy_output(lf: LazyFrame, output_file: PathBuf, separator: u8) -> Result<()> {
     if output_file == Path::new("-") {
-        let mut df = lf
-            .collect()
-            .expect("Failed to collect lazy frame prior to writing to stdout");
-        write_df_output(&mut df, &output_file, separator);
+        let mut df = AnyhowContext::context(
+            lf.collect(),
+            "Failed to collect lazy frame prior to writing to stdout",
+        )?;
+        write_df_output(&mut df, &output_file, separator)?;
     } else {
         let writer_opts = CsvWriterOptions {
             include_bom: false,
@@ -52,23 +62,30 @@ fn write_lazy_output(lf: LazyFrame, output_file: PathBuf, separator: u8) {
                 quote_style: QuoteStyle::default(),
             }),
         };
-        lf.sink(
-            SinkDestination::File {
-                target: SinkTarget::Path(PlRefPath::try_from_pathbuf(output_file).unwrap()),
-            },
-            FileWriteFormat::Csv(writer_opts),
-            UnifiedSinkArgs::default(),
-        )
-        .expect("Failed to open to CSV file for writing")
-        .collect()
-        .expect("Failed to collect lazy frame prior to writing to file");
+
+        let sink = AnyhowContext::context(
+            lf.sink(
+                SinkDestination::File {
+                    target: SinkTarget::Path(PlRefPath::try_from_pathbuf(output_file).unwrap()),
+                },
+                FileWriteFormat::Csv(writer_opts),
+                UnifiedSinkArgs::default(),
+            ),
+            "Failed to open CSV file for writing",
+        )?;
+
+        AnyhowContext::context(
+            sink.collect(),
+            "Failed to collect lazy frame prior to writing to file",
+        )?;
     }
+    Ok(())
 }
 
 pub trait WriteToCsvOrStdout {
-    fn write_to_csv_or_stdout(self, output_file: PathBuf);
-    fn write_to_tsv_or_stdout(self, output_file: PathBuf);
-    fn write_to_flat_or_stdout(self, output_file: PathBuf, separator: Option<u8>)
+    fn write_to_csv_or_stdout(self, output_file: PathBuf) -> Result<()>;
+    fn write_to_tsv_or_stdout(self, output_file: PathBuf) -> Result<()>;
+    fn write_to_flat_or_stdout(self, output_file: PathBuf, separator: Option<u8>) -> Result<()>
     where
         Self: Sized,
     {
@@ -90,27 +107,27 @@ pub trait WriteToCsvOrStdout {
 }
 
 impl WriteToCsvOrStdout for DataFrame {
-    fn write_to_csv_or_stdout(mut self, output_file: PathBuf) {
-        write_df_output(&mut self, &output_file, b',');
+    fn write_to_csv_or_stdout(mut self, output_file: PathBuf) -> Result<()> {
+        write_df_output(&mut self, &output_file, b',')
     }
-    fn write_to_tsv_or_stdout(mut self, output_file: PathBuf) {
-        write_df_output(&mut self, &output_file, b'\t');
+    fn write_to_tsv_or_stdout(mut self, output_file: PathBuf) -> Result<()> {
+        write_df_output(&mut self, &output_file, b'\t')
     }
 }
 impl WriteToCsvOrStdout for LazyFrame {
-    fn write_to_csv_or_stdout(self, output_file: PathBuf) {
-        write_lazy_output(self, output_file, b',');
+    fn write_to_csv_or_stdout(self, output_file: PathBuf) -> Result<()> {
+        write_lazy_output(self, output_file, b',')
     }
-    fn write_to_tsv_or_stdout(self, output_file: PathBuf) {
-        write_lazy_output(self, output_file, b'\t');
+    fn write_to_tsv_or_stdout(self, output_file: PathBuf) -> Result<()> {
+        write_lazy_output(self, output_file, b'\t')
     }
 }
 
-pub fn read_from_csv(input_file: PathBuf) -> LazyFrame {
-    match LazyCsvReader::new(PlRefPath::try_from_pathbuf(input_file).unwrap()).finish() {
-        Ok(lf) => lf,
-        Err(e) => panic!("Failed to read CSV file: {e}"),
-    }
+pub fn read_from_csv(input_file: PathBuf) -> Result<LazyFrame> {
+    AnyhowContext::with_context(
+        LazyCsvReader::new(PlRefPath::try_from_pathbuf(input_file.clone())?).finish(),
+        || format!("Failed to read CSV file: {}", input_file.to_string_lossy()),
+    )
 }
 
 /// Reads a TSV (Tab-Separated Values) file into a `LazyFrame`.
@@ -152,14 +169,13 @@ pub fn read_from_csv(input_file: PathBuf) -> LazyFrame {
 ///
 /// Ensure that the input file exists and is accessible, and the format strictly
 /// follows the TSV structure (tab-separated values).
-pub fn read_from_tsv(input_file: PathBuf) -> LazyFrame {
-    match LazyCsvReader::new(PlRefPath::try_from_pathbuf(input_file).unwrap())
-        .with_separator(b'\t')
-        .finish()
-    {
-        Ok(lf) => lf,
-        Err(e) => panic!("Failed to read TSV file: {e}"),
-    }
+pub fn read_from_tsv(input_file: PathBuf) -> Result<LazyFrame> {
+    AnyhowContext::with_context(
+        LazyCsvReader::new(PlRefPath::try_from_pathbuf(input_file.clone())?)
+            .with_separator(b'\t')
+            .finish(),
+        || format!("Failed to read TSV file: {}", input_file.to_string_lossy()),
+    )
 }
 
 /// Reads data from a file and returns a `LazyFrame` based on the file's content and specified format.
@@ -205,7 +221,7 @@ pub fn read_from_tsv(input_file: PathBuf) -> LazyFrame {
 /// let input_path = PathBuf::from("data.xlsx");
 /// let lazy_frame = read_from_file(input_path, None);
 /// ```
-pub fn read_from_file(input_file: PathBuf, separator: Option<u8>) -> LazyFrame {
+pub fn read_from_file(input_file: PathBuf, separator: Option<u8>) -> Result<LazyFrame> {
     match separator {
         Some(sep) => match sep {
             b'\t' => read_from_tsv(input_file),
@@ -215,9 +231,7 @@ pub fn read_from_file(input_file: PathBuf, separator: Option<u8>) -> LazyFrame {
         _ => match get_extension_from_filename(&input_file) {
             Some(v) => match v {
                 "tsv" => read_from_tsv(input_file),
-                "xls" | "xlsx" => read_excel(&input_file, None, 0, None)
-                    .expect("Failed to read Excel file")
-                    .lazy(),
+                "xls" | "xlsx" => Ok(read_excel(&input_file, None, 0, None)?.lazy()),
                 _ => read_from_csv(input_file),
             },
             None => read_from_tsv(input_file),
@@ -364,7 +378,10 @@ pub fn read_excel(
         series_vec.push(s.into_column());
     }
 
-    DataFrame::new_infer_height(series_vec)
+    PolarsContext::context(
+        DataFrame::new_infer_height(series_vec),
+        "Failed to read Excel file",
+    )
 }
 
 #[cfg(test)]
@@ -439,7 +456,7 @@ mod tests {
             .with_extension(ext.unwrap_or(""));
         write_text_file(&path, text);
 
-        let df = collect_df(read_from_file(path, sep));
+        let df = collect_df(read_from_file(path, sep).unwrap());
 
         assert_eq!(df.shape(), (1, 2));
         assert_eq!(df.get_column_names()[0].as_str(), "a");
@@ -458,7 +475,7 @@ mod tests {
             .with_file_name(get_timestamp())
             .with_extension(ext.unwrap_or(""));
 
-        test_df.write_to_flat_or_stdout(path.clone(), sep);
+        test_df.write_to_flat_or_stdout(path.clone(), sep).unwrap();
         let written = fs::read_to_string(&path).expect("failed to read output file");
         assert!(
             written.contains(text),
@@ -478,7 +495,7 @@ mod tests {
             .with_file_name(get_timestamp())
             .with_extension(ext.unwrap_or(""));
 
-        test_lf.write_to_flat_or_stdout(path.clone(), sep);
+        test_lf.write_to_flat_or_stdout(path.clone(), sep).unwrap();
         let written = fs::read_to_string(&path).expect("failed to read output file");
         assert!(
             written.contains(text),
@@ -492,7 +509,7 @@ mod tests {
         let path = temp.with_file_name(get_timestamp()).with_extension("tsv");
         write_text_file(&path, "col1\tcol2\nv1\tv2\n");
 
-        let df = collect_df(read_from_file(path.clone(), Some(b'\t')));
+        let df = collect_df(read_from_file(path.clone(), Some(b'\t')).unwrap());
 
         // This test is intentionally strict: if TSV is parsed as CSV, you'll get one column.
         assert_eq!(
@@ -565,7 +582,7 @@ mod tests {
     #[rstest]
     #[case::normal_file("tests/data/plate_reader_data_expected.xlsx")]
     fn test_read_excel_from_generic(#[case] path: PathBuf) {
-        let df = read_from_file(path, None).collect().unwrap();
+        let df = read_from_file(path, None).unwrap().collect().unwrap();
 
         assert!(df.width() > 0, "expected at least one column");
         assert!(df.height() > 0, "expected at least one row");

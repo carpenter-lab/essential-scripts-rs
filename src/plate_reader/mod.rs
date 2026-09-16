@@ -1,8 +1,10 @@
-use clap::{Error, Subcommand};
+use anyhow::{Context, Result};
+use clap::Subcommand;
 use std::path::PathBuf;
 
 #[cfg(feature = "base_cmd")]
 mod core;
+mod dataframe;
 
 #[derive(Subcommand)]
 #[command(about = "Reformat plate reader data into useful format")]
@@ -19,19 +21,15 @@ pub enum Commands {
     },
 }
 #[cfg(feature = "base_cmd")]
-pub fn handle_command(cmd: Commands) -> Result<(), Error> {
+pub fn handle_command(cmd: Commands) -> Result<()> {
     match cmd {
         Commands::ReformatPlateReaderData {
             input_file,
             output_path,
         } => {
             #[cfg(feature = "base_cmd")]
-            core::reformat_plate_reader_data(&input_file, &output_path).map_err(|e| {
-                Error::raw(
-                    clap::error::ErrorKind::Io,
-                    format!("Failed to reformat plate reader data: {e}"),
-                )
-            })?;
+            core::reformat_plate_reader_data(&input_file, &output_path)
+                .context("Failed to reformat plate reader data")?;
         }
     }
     Ok(())

@@ -1,6 +1,6 @@
 use crate::io::WriteToCsvOrStdout;
 use crate::tcr_align::dataframe;
-use polars::error::PolarsResult;
+use anyhow::{Context, Result};
 use polars::frame::DataFrame;
 use polars::prelude::{
     DataFrameJoinOps, JoinArgs, JoinType, LazyCsvReader, LazyFileListReader, PlRefPath,
@@ -56,7 +56,7 @@ use std::path::PathBuf;
 ///   occurs during the execution of the computation.
 pub trait Run {
     type Output;
-    fn run(&self, n_replicates: usize) -> PolarsResult<Self::Output>;
+    fn run(&self, n_replicates: usize) -> Result<Self::Output>;
 }
 
 impl Run for DataFrame {
@@ -100,19 +100,12 @@ impl Run for DataFrame {
     ///     Err(err) => eprintln!("Error during processing: {:?}", err),
     /// }
     /// ```
-    fn run(self: &DataFrame, n_replicates: usize) -> PolarsResult<Self::Output> {
+    fn run(self: &DataFrame, n_replicates: usize) -> Result<Self::Output> {
         let all_unique_alpha = dataframe::all_unique_cdr3_alpha(self)?;
 
-        //let groups = dataframe::prepare_parasail_groups(self);
-        match dataframe::prepare_parasail_groups(self) {
-            Err(e) => {
-                eprintln!("Error preparing parasail groups: {e}");
-                Err(e)
-            }
-            Ok(groups) => {
-                dataframe::fraction_self_greater(&groups, &all_unique_alpha, n_replicates, 7, 1)
-            }
-        }
+        let groups = dataframe::prepare_parasail_groups(self)?;
+        dataframe::fraction_self_greater(&groups, &all_unique_alpha, n_replicates, 7, 1)
+            .context("Failed to compute fraction self greater during DataFrame run operation")
     }
 }
 
@@ -159,7 +152,7 @@ impl Run for DataFrame {
 /// - The join operation is performed on the `pattern` column from both the original
 ///   and resulting `DataFrame` using a `Right Join`.
 /// - The `JoinArgs::new(JoinType::Right)` specifies the type of join to be used.
-fn score_df(df: &DataFrame, replicates: usize) -> PolarsResult<DataFrame> {
+fn score_df(df: &DataFrame, replicates: usize) -> Result<DataFrame> {
     let res = df.run(replicates)?;
     df.join(
         &res,
@@ -168,6 +161,7 @@ fn score_df(df: &DataFrame, replicates: usize) -> PolarsResult<DataFrame> {
         JoinArgs::new(JoinType::Right),
         None,
     )
+    .context("Failed to join DataFrame with scored results")
 }
 
 /// Compute the TCR score for alignments from an input CSV file and save the results to an output file.
@@ -205,16 +199,20 @@ fn score_df(df: &DataFrame, replicates: usize) -> PolarsResult<DataFrame> {
 /// ```
 ///
 /// Ensure the input CSV file follows the expected format for TCR alignments, or the computation will fail.
-pub(crate) fn tcr_score(input_file: PathBuf, output_file: PathBuf, replicates: usize) {
-    let df = LazyCsvReader::new(PlRefPath::try_from_pathbuf(input_file).unwrap())
-        .finish()
-        .unwrap()
-        .collect()
-        .unwrap();
+pub(crate) fn tcr_score(
+    input_file: PathBuf,
+    output_file: PathBuf,
+    replicates: usize,
+) -> Result<()> {
+    let df = LazyCsvReader::new(PlRefPath::try_from_pathbuf(input_file)?)
+        .finish()?
+        .collect()?;
 
     score_df(&df, replicates)
-        .expect("Failed to score TCR alignments. Please check the input file format and try again.")
-        .write_to_csv_or_stdout(output_file);
+        .context(
+            "Failed to score TCR alignments. Please check the input file format and try again.",
+        )?
+        .write_to_csv_or_stdout(output_file)
 }
 
 #[cfg(test)]
@@ -258,7 +256,7 @@ mod tests {
 
         let err = df.run(1).expect_err("expected missing pattern to error");
         let msg = err.to_string().to_lowercase();
-        assert!(msg.contains("unable to find column \"pattern\""));
+        assert!(msg.contains("failed to collect grouped dataframe in `prepare_parasail_groups`"));
     }
 
     #[test]

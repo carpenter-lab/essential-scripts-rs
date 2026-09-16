@@ -1,5 +1,6 @@
 use crate::geo_submission::traits::*;
-use indicatif::ProgressBar;
+use crate::progress::FileByteProgress;
+use anyhow::{Context, Result};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::fs;
 use std::path::PathBuf;
@@ -17,7 +18,7 @@ pub fn prepare_paths_report<T: HasPath>(item: &T) -> String {
 
 pub(super) fn build_records_from_paths<T: FromPathWithMd5>(
     paths: Vec<PathBuf>,
-    pb: Option<&Arc<ProgressBar>>,
+    pb: Option<&Arc<FileByteProgress>>,
     parallel: &bool,
     jobs: &usize,
 ) -> Vec<T> {
@@ -62,13 +63,10 @@ pub fn generate_md5_report<T: Md5Record>(items: &[T]) -> String {
 }
 
 /// Write output to file or stdout
-pub fn write_output(
-    content: &str,
-    output_path: Option<&PathBuf>,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn write_output(content: &str, output_path: Option<&PathBuf>) -> Result<()> {
     match output_path {
         Some(path) => {
-            fs::write(path, content)?;
+            fs::write(path, content).context("Failed to write output to file")?;
             println!("Wrote output to: {}", path.display());
         }
         None => {
@@ -82,7 +80,6 @@ pub fn write_output(
 mod tests {
     use super::*;
     use crate::geo_submission::traits::{FromPathWithMd5, HasPath, Md5Record};
-    use indicatif::ProgressBar;
     use pretty_assertions::assert_eq;
     use rstest::rstest;
     use std::path::{Path, PathBuf};
@@ -112,7 +109,7 @@ mod tests {
     impl FromPathWithMd5 for MockItem {
         fn from_path_with_md5(
             path: PathBuf,
-            _pb: Option<&Arc<ProgressBar>>,
+            _pb: Option<&Arc<FileByteProgress>>,
         ) -> Result<Self, Box<dyn std::error::Error>> {
             if path.to_str().map(|s| s.contains("fail")).unwrap_or(false) {
                 return Err("mock failure".into());

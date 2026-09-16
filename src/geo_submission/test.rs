@@ -1,28 +1,9 @@
 use super::*;
-use crate::geo_submission::helper::{
-    TOO_MANY_CORES_SUBTRACTED_ERROR, make_progress_bar, process_cores_with_available,
-    subtract_from_available_cores,
-};
+use crate::geo_submission::helper::{process_cores_with_available, subtract_from_available_cores};
 use clap::builder::TypedValueParser;
 use pretty_assertions::assert_eq;
 use rstest::{fixture, rstest};
 use std::ffi::OsStr;
-
-#[rstest]
-#[case::progress_bar(Progress::Progress, 1000, 1000)]
-#[case::progress_bar_hidden(Progress::NoProgress, 1000, 1000)]
-#[case::progress_bar_zero_bytes(Progress::Progress, 0, 0)]
-fn test_make_progress_bar(
-    #[case] progress: Progress,
-    #[case] total_bytes: u64,
-    #[case] expected_length: u64,
-) {
-    let result = make_progress_bar(total_bytes, progress);
-    assert!(result.is_ok());
-
-    let pb = result.unwrap();
-    assert_eq!(pb.length(), Some(expected_length));
-}
 
 #[fixture]
 fn available_cores() -> usize {
@@ -48,7 +29,7 @@ fn test_process_cores(
 #[case::subtract_one(4, -1, Ok(3))] // Subtract 1 from 4 cores = 3
 #[case::subtract_two(4, -2, Ok(2))] // Subtract 2 from 4 cores = 2
 #[case::subtract_all(4, -4, Ok(0))] // Subtract all cores = 0
-#[case::too_many_cores(4, -5, Err(TOO_MANY_CORES_SUBTRACTED_ERROR)
+#[case::too_many_cores(4, -5, Err("cannot subtract more cores than available")
 )] // Should error: subtracting more than available
 fn test_subtract_from_available_cores(
     #[case] available: usize,
@@ -67,7 +48,6 @@ fn test_subtract_from_available_cores(
 fn test_subtract_too_many_cores_error_message() {
     let result = subtract_from_available_cores(4, -10);
     assert!(result.is_err());
-    assert_eq!(result.unwrap_err(), TOO_MANY_CORES_SUBTRACTED_ERROR);
 }
 
 #[rstest]

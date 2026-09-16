@@ -1,5 +1,6 @@
 use crate::enrich::api::{EnrichrAPI, EnrichrAPITrait};
 use crate::io::WriteToCsvOrStdout;
+use anyhow::{Context, Result, anyhow};
 use cairo;
 use plotters::coord::Shift;
 use plotters::prelude::*;
@@ -8,7 +9,6 @@ use polars::polars_utils::itertools::Itertools;
 use polars::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tokio;
@@ -192,10 +192,7 @@ impl Enrichment {
         self
     }
 
-    pub async fn run<A: EnrichrAPITrait>(
-        &mut self,
-        api: &mut A,
-    ) -> Result<&mut Self, Box<dyn Error>> {
+    pub async fn run<A: EnrichrAPITrait>(&mut self, api: &mut A) -> Result<&mut Self> {
         api.send_genes(&self.gene_list, &self.libraries, false)
             .await?;
         if self.background.is_some() {
@@ -213,7 +210,7 @@ impl Enrichment {
         api.get_short_id()
     }
 
-    pub fn save_results(&self, path_buf: PathBuf) -> Result<(), Box<dyn Error>> {
+    pub fn save_results(&self, path_buf: PathBuf) -> Result<()> {
         let df: Vec<LazyFrame> = self
             .results
             .iter()
@@ -221,8 +218,7 @@ impl Enrichment {
             .collect::<Result<Vec<_>, _>>()?;
         let combined_df = concat(df, UnionArgs::default())?;
         println!("{}", combined_df.clone().collect()?);
-        tokio::task::block_in_place(|| combined_df.write_to_tsv_or_stdout(path_buf));
-        Ok(())
+        tokio::task::block_in_place(|| combined_df.write_to_tsv_or_stdout(path_buf))
     }
 
     fn parse_color(s: &str) -> RGBColor {
@@ -254,7 +250,7 @@ impl Enrichment {
         message: &str,
         width: u32,
         height: u32,
-    ) -> Result<(), Box<dyn Error + Send + Sync>>
+    ) -> Result<()>
     where
         DB::ErrorType: 'static,
     {
@@ -275,7 +271,7 @@ impl Enrichment {
         message: &str,
         width: u32,
         height: u32,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<()> {
         let ext = path
             .extension()
             .and_then(|s| s.to_str())
@@ -299,11 +295,11 @@ impl Enrichment {
             "png" | "jpg" | "jpeg" => {
                 let path_str = path
                     .to_str()
-                    .ok_or_else(|| format!("Invalid path: {}", path.display()))?;
+                    .with_context(|| format!("Invalid path: {}", path.display()))?;
                 let root = BitMapBackend::new(path_str, (width, height)).into_drawing_area();
                 Self::draw_message_on_root(&root, message, width, height)
             }
-            other => Err(format!("Unsupported output extension: {other}").into()),
+            other => Err(anyhow::anyhow!("Unsupported output extension: {other}")),
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -317,7 +313,7 @@ impl Enrichment {
         n: usize,
         color_primary: RGBColor,
         color_secondary: RGBColor,
-    ) -> Result<(), Box<dyn Error + Send + Sync>>
+    ) -> Result<()>
     where
         DB::ErrorType: 'static,
     {
@@ -349,8 +345,7 @@ impl Enrichment {
             Rectangle::new([(0.0, i), (x, i + 1)], fill)
         }))?;
 
-        root.present()?;
-        Ok(())
+        root.present().context("Failed to render bar chart")
     }
     fn draw_bar_plot_file(
         results: &EnrichrResult,
@@ -359,7 +354,7 @@ impl Enrichment {
         color_primary: RGBColor,
         color_secondary: RGBColor,
         top_n: usize,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    ) -> Result<()> {
         const BAR_HEIGHT_PER_ITEM: u32 = 70;
         const MIN_BAR_ROWS: u32 = 5;
 
@@ -429,7 +424,7 @@ impl Enrichment {
             "png" | "jpg" | "jpeg" => {
                 let path_str = path
                     .to_str()
-                    .ok_or_else(|| format!("Invalid path: {}", path.display()))?;
+                    .with_context(|| format!("Invalid path: {}", path.display()))?;
                 let root = BitMapBackend::new(path_str, (width, height)).into_drawing_area();
                 Self::render_bar_chart(
                     &root,
@@ -443,7 +438,7 @@ impl Enrichment {
                     color_secondary,
                 )
             }
-            other => Err(format!("Unsupported output extension: {other}").into()),
+            other => Err(anyhow!("Unsupported output extension: {other}")),
         }
     }
 
@@ -453,7 +448,7 @@ impl Enrichment {
         library: Option<String>,
         color: Option<String>,
         color2: Option<String>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<()> {
         let lib = library.unwrap_or_else(|| self.libraries[0].clone());
         let color = color.unwrap_or_else(|| "lightskyblue".to_string());
         let color2 = color2.unwrap_or_else(|| "lightgrey".to_string());
@@ -462,11 +457,7 @@ impl Enrichment {
             .results
             .iter()
             .find(|r| r.library == lib)
-            .ok_or_else(|| {
-                Box::new(std::io::Error::other(format!(
-                    "No results found for library: {lib}"
-                ))) as Box<dyn Error>
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("No results found for library: {lib}"))?;
 
         // Clone for blocking thread
         let result_clone = result.clone();
@@ -489,26 +480,21 @@ impl Enrichment {
                     top_n,
                 )?;
             }
-            Ok::<(), Box<dyn Error + Send + Sync>>(())
+            Ok(())
         })
         .await;
 
         // Map JoinError -> plain boxed error, then handle inner boxed error explicitly
-        let inner_res: Result<(), Box<dyn Error + Send + Sync>> = match join_result {
+        let inner_res: Result<(), anyhow::Error> = match join_result {
             Ok(res) => res,
             Err(join_err) => {
-                return Err(Box::from(format!(
+                return Err(anyhow::anyhow!(
                     "Failed to execute bar plot rendering task: {join_err}"
-                )));
+                ));
             }
         };
 
-        if let Err(inner_err) = inner_res {
-            // convert inner boxed Send+Sync error into a plain boxed error for this API
-            return Err(Box::from(inner_err.to_string()));
-        }
-
-        Ok(())
+        inner_res.context("Failed to render bar plot")
     }
 }
 
@@ -518,7 +504,7 @@ pub async fn enrich_command(
     background: Option<PathBuf>,
     output_file: PathBuf,
     output_plot: Vec<PathBuf>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<()> {
     let genes = get_genes(&gene_list)?;
     let libraries = vec![library.clone()];
     let mut enrich = Enrichment::new(genes, libraries);
@@ -544,8 +530,9 @@ pub async fn enrich_command(
     Ok(())
 }
 
-fn get_genes(gene_list: &PathBuf) -> Result<Vec<String>, Box<dyn Error>> {
-    let genes: Vec<String> = fs::read_to_string(gene_list)?
+fn get_genes(gene_list: &PathBuf) -> Result<Vec<String>> {
+    let genes: Vec<String> = fs::read_to_string(gene_list)
+        .with_context(|| format!("Failed to read gene list: {}", gene_list.display()))?
         .lines()
         .map(|line| line.trim().to_string())
         .filter(|line| !line.is_empty())

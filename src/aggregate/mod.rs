@@ -1,4 +1,5 @@
-use clap::{Error, Subcommand};
+use anyhow::Result;
+use clap::Subcommand;
 use std::path::PathBuf;
 
 #[cfg(feature = "base_cmd")]
@@ -32,15 +33,16 @@ pub enum Commands {
 }
 
 #[cfg(feature = "base_cmd")]
-pub fn handle_command(cmd: Commands) -> Result<(), Error> {
+pub fn handle_command(cmd: Commands) -> Result<()> {
     match cmd {
         Commands::AggregateCellRangerTCR {
             input_files,
             output_file,
             keep_alpha,
-        } => {
+        } =>
+        {
             #[cfg(feature = "base_cmd")]
-            core::aggregate_cellranger_tcr_output(input_files, output_file, keep_alpha);
+            core::aggregate_cellranger_tcr_output(input_files, output_file, keep_alpha)?
         }
     }
     Ok(())

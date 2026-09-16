@@ -3,6 +3,9 @@ mod api;
 #[cfg(feature = "enrichment")]
 mod core;
 
+#[cfg(feature = "enrichment")]
+use anyhow::Context;
+use anyhow::Result;
 use clap::{Error, Subcommand, ValueEnum};
 use std::fmt;
 use std::path::PathBuf;
@@ -38,10 +41,13 @@ impl fmt::Display for Library {
 }
 
 #[cfg(feature = "enrichment")]
-fn must_be_none(pb: Option<&PathBuf>) -> Result<Option<PathBuf>, String> {
+fn must_be_none(pb: Option<&PathBuf>) -> Result<Option<PathBuf>> {
     match pb {
         None => Ok(None),
-        Some(_) => Err("Background is not supported in the API".to_string()),
+        Some(_) => Err(anyhow::Error::new(Error::raw(
+            clap::error::ErrorKind::ValueValidation,
+            "Background is not supported in the API",
+        ))),
     }
 }
 
@@ -77,7 +83,7 @@ pub enum Commands {
 
 #[cfg(feature = "base_cmd")]
 #[tokio::main]
-pub async fn handle_command(cmd: Commands) -> Result<(), Error> {
+pub async fn handle_command(cmd: Commands) -> Result<()> {
     #[cfg(feature = "enrichment")]
     {
         match cmd {
@@ -88,10 +94,8 @@ pub async fn handle_command(cmd: Commands) -> Result<(), Error> {
                 output_file,
                 output_plot,
             } => {
-                if let Err(e) = must_be_none(background.as_ref()) {
-                    return Err(Error::raw(clap::error::ErrorKind::ValueValidation, e));
-                }
-                match core::enrich_command(
+                must_be_none(background.as_ref())?;
+                core::enrich_command(
                     library.to_string(),
                     gene_list,
                     background,
@@ -99,13 +103,7 @@ pub async fn handle_command(cmd: Commands) -> Result<(), Error> {
                     output_plot,
                 )
                 .await
-                {
-                    Ok(()) => Ok(()),
-                    Err(e) => Err(Error::raw(
-                        clap::error::ErrorKind::Io,
-                        format!("Enrichment analysis failed: {e}"),
-                    )),
-                }
+                .context("Enrichment analysis failed")
             }
         }
     }
@@ -113,10 +111,10 @@ pub async fn handle_command(cmd: Commands) -> Result<(), Error> {
     #[cfg(not(feature = "enrichment"))]
     {
         match cmd {
-            Commands::RunEnrichr { .. } => Err(Error::raw(
+            Commands::RunEnrichr { .. } => Err(anyhow::Error::new(Error::raw(
                 clap::error::ErrorKind::MissingSubcommand,
                 "This command requires the `enrichment` feature. Rebuild with `--features enrichment`",
-            )),
+            ))),
         }
     }
 }
@@ -151,10 +149,13 @@ mod tests {
                 output_plot: vec![PathBuf::from("plot.png")],
             };
             if let Err(e) = handle_command(cmd) {
-                assert_eq!(e.kind(), clap::ErrorKind::MissingSubcommand);
+                assert_eq!(
+                    crate::underlying_clap_error_kind(&e),
+                    Some(clap::error::ErrorKind::MissingSubcommand)
+                );
                 assert_eq!(
                     e.to_string(),
-                    "This command requires the `enrichment` feature. Rebuild with `--features enrichment`"
+                    "error: This command requires the `enrichment` feature. Rebuild with `--features enrichment`"
                 );
             }
         }
@@ -189,7 +190,10 @@ mod tests {
 
             let err = handle_command(cmd).expect_err("expected background validation error");
 
-            assert_eq!(err.kind(), clap::error::ErrorKind::ValueValidation);
+            assert_eq!(
+                crate::underlying_clap_error_kind(&err),
+                Some(clap::error::ErrorKind::ValueValidation)
+            );
             assert!(
                 err.to_string()
                     .contains("Background is not supported in the API")
