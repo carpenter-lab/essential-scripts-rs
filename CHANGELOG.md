@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v1.1.0...v1.2.0) (2026-10-13)
+
+
+### Features
+
+* add support for zip file type in content type detection ([c1b67f1](https://github.com/carpenter-lab/essential-scripts-rs/commit/c1b67f1d2fb9edbabeff46d18cf1a1a51e4edc14))
+
 ## [1.1.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v1.0.2...v1.1.0) (2026-09-01)
 
 
