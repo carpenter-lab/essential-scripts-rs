@@ -251,6 +251,7 @@ fn detect_mime_type(path: &Path) -> Result<&'static str> {
         Some("txt") => Ok("text/plain"),
         Some("tiff") | Some("tif") => Ok("image/tiff"),
         Some("svg") => Ok("image/svg+xml"),
+        Some("zip") => Ok("application/zip"),
         _ => Err(anyhow!("unsupported file type: {}", path.display())),
     }
 }
