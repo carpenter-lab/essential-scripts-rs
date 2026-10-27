@@ -1,5 +1,6 @@
 pub mod aggregate;
 pub mod copy_cellranger_outs;
+pub mod cores;
 pub mod enrich;
 pub mod geo_submission;
 #[cfg(feature = "base_cmd")]
@@ -8,8 +9,11 @@ pub mod plate_reader;
 pub mod split;
 pub mod tcr_align;
 
+pub mod cache;
 pub mod dryad;
+pub mod gliph;
 pub mod progress;
+pub mod tcrmatch;
 #[cfg(test)]
 pub mod test_helpers;
 

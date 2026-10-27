@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand};
 mod docs;
 
 use essential_scripts_rs::{
-    aggregate, copy_cellranger_outs, dryad, enrich, geo_submission, plate_reader, split, tcr_align,
-    underlying_clap_error_kind,
+    aggregate, copy_cellranger_outs, dryad, enrich, geo_submission, gliph, plate_reader, split,
+    tcr_align, tcrmatch, underlying_clap_error_kind,
 };
 
 #[derive(Parser)]
@@ -42,6 +42,12 @@ enum Commands {
 
     #[command(flatten)]
     Dryad(dryad::Commands),
+
+    #[command(flatten)]
+    Gliph(gliph::Commands),
+
+    #[command(flatten)]
+    TcrMatch(tcrmatch::Commands),
 }
 
 #[cfg(feature = "base_cmd")]
@@ -55,6 +61,8 @@ pub(crate) fn main_helper(cli: Cli) {
         Some(Commands::MatchFastq(cmd)) => geo_submission::handle_command(&cmd),
         Some(Commands::RunEnrichr(cmd)) => enrich::handle_command(cmd),
         Some(Commands::Dryad(cmd)) => dryad::handle_command(cmd),
+        Some(Commands::Gliph(cmd)) => gliph::handle_command(cmd),
+        Some(Commands::TcrMatch(cmd)) => tcrmatch::handle_command(cmd),
         None => Ok(()),
     };
     if let Err(err) = result {

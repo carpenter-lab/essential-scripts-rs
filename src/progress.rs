@@ -109,6 +109,18 @@ pub fn dual_progress_bars(
     Ok((outer, inner))
 }
 
+pub fn progress_bar_with_message(length: usize, message: &str) -> Result<ProgressBar> {
+    let progress = ProgressBar::new(length as u64);
+    progress.set_style(
+        ProgressStyle::with_template(
+            "{msg:<36} [{bar:40.cyan/blue}] {human_pos:>7}/{human_len} ({eta}) {per_sec}",
+        )?
+        .progress_chars("=> "),
+    );
+    progress.set_message(message.to_owned());
+    Ok(progress)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

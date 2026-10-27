@@ -3,50 +3,17 @@ mod build_reports;
 #[cfg(feature = "base_cmd")]
 mod fastq;
 #[cfg(feature = "base_cmd")]
-mod helper;
-#[cfg(feature = "base_cmd")]
 mod md5;
 #[cfg(feature = "base_cmd")]
 mod traits;
 
-#[cfg(test)]
-mod test;
-
+use crate::cores::{process_cores, thread_default, thread_parser};
 use crate::progress::ProgressArg;
 use anyhow::Result;
-use clap::builder::RangedI64ValueParser;
 use clap::{Args, Subcommand};
 #[cfg(feature = "base_cmd")]
 use fastq::*;
 use std::path::PathBuf;
-
-#[cfg(test)]
-fn num_cpu() -> usize {
-    4
-}
-
-#[cfg(not(test))]
-fn num_cpu() -> usize {
-    num_cpus::get()
-}
-
-#[cfg(feature = "base_cmd")]
-fn thread_parser() -> RangedI64ValueParser<i32> {
-    clap::value_parser!(i32).range(1 + -(num_cpu() as i64)..=num_cpu() as i64)
-}
-#[cfg(feature = "base_cmd")]
-fn thread_default() -> i32 {
-    num_cpu().try_into().unwrap()
-}
-
-#[cfg(not(feature = "base_cmd"))]
-fn thread_default() -> i32 {
-    0
-}
-#[cfg(not(feature = "base_cmd"))]
-fn thread_parser() -> RangedI64ValueParser<i32> {
-    clap::value_parser!(i32).range(-1..1)
-}
 
 #[derive(Args, Debug)]
 pub struct RunArgs {
@@ -102,7 +69,7 @@ pub fn handle_command(cmd: &Commands) -> Result<()> {
             md5_output,
             generate_args,
         } => {
-            let jobs = helper::process_cores(Some(generate_args.threads)).unwrap_or_else(|e| {
+            let jobs = process_cores(Some(generate_args.threads)).unwrap_or_else(|e| {
                 eprintln!("Could not set number of threads: {e}");
                 std::process::exit(1);
             });
