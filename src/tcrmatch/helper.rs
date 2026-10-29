@@ -315,9 +315,6 @@ pub fn k3_sum(k1: &[[f32; 20]; 20], pep1: &Peptide, pep2: &Peptide) -> f32 {
 }
 
 pub fn populate_peptide_affinities(k1: &[[f32; 20]; 20], peplist: &mut [Peptide]) {
-    let progress = progress_bar_with_message(peplist.len(), "Calculating peptide affinities")
-        .expect("Failed to create progress bar for peptide affinities");
-
     peplist.par_iter_mut().for_each(|pep| {
         pep.indices = pep
             .seq
@@ -325,9 +322,7 @@ pub fn populate_peptide_affinities(k1: &[[f32; 20]; 20], peplist: &mut [Peptide]
             .map(|b| ALPHABET.bytes().position(|x| x == b).unwrap())
             .collect();
         pep.aff = k3_sum(k1, pep, pep);
-        progress.inc(1);
     });
-    progress.finish();
 }
 
 pub struct SequenceMatch<'a> {

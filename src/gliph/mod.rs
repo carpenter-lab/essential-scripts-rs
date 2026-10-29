@@ -24,6 +24,25 @@ use anyhow::{Context, Result};
 #[derive(Subcommand)]
 pub enum Commands {
     /// A reimplementation of the GLIPH algorithms
+    ///
+    /// `run-gliph` reads a chain table with required `subject:condition` and `TcRb`
+    /// columns (and optional `TcRa`, `V`, `J`, and `counts` columns). Each
+    /// `subject:condition` value is split at the first colon during processing. An
+    /// optional HLA TSV can be supplied with `--hla-file`; it has a header row and
+    /// each row contains the subject followed by left/right allele columns for
+    /// `HLA-DPA1`, `HLA-DPB1`, `HLA-DQA1`, `HLA-DQB1`, `HLA-DRB1`, and `HLA-DRB3/4/5`
+    /// (`NA` or empty means missing). Output has eight HLA columns (DRB3, DRB4 and DRB5
+    /// are split by allele name); distinct alleles are joined with `/`, e.g.
+    /// `DPA1*01:03/DPA1*02:01`, and all of them are used for scoring. Alleles whose enrichment p-value within a cluster is at
+    /// or below
+    /// `--hla-threshold` (default 0.05) are suffixed with `!` in the output. When omitted,
+    /// HLA output columns are left blank. It writes one row per chain that belongs
+    /// to a GLIPH cluster.
+    /// The output is a TSV with the fixed column order
+    /// `index`, `pattern`, `number_subject`, `number_unique_cdr3`, `TcRb`,
+    /// `Fisher_score`, `Freq`, `subject`, `condition`, `final_score`, `hla_score`,
+    /// `vb_score`, `expansion_score`, `length_score`, `cluster_size_score`, `type`,
+    /// `ulTcRb`, `V`, `J`, `TcRa`, and the eight HLA columns above.
     RunGliph {
         #[arg(
             help = "TSV containing subject:condition, TcRb, and optional TcRa/V/J/counts columns"
