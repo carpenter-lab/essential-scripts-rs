@@ -30,7 +30,9 @@ plotters-cairo = { version = "0.9", optional = true }
 cairo-rs = { version = "0.22", optional = true, features = ["pdf"] }
 clap-binary-enum = "0.1"
 clap-markdown = "0.1"
-thiserror = "2.0.18"
+thiserror = "2.0"
+rust-igraph = "0.7"
+rustc-hash = { version = "2.1", optional = true }
 
 [dependencies.polars]
 version = "0.55"
@@ -47,7 +49,11 @@ features = ["svg_backend", "bitmap_backend", "ttf", "bitmap_encoder"]
 default = ["base_cmd"]
 enrichment = ["dep:reqwest", "dep:serde", "dep:serde_json", "dep:plotters", "dep:plotters-cairo", "dep:cairo-rs"]
 tcr = ["dep:parasail-rs", "dep:rand"]
-base_cmd = ["dep:indicatif", "dep:regex", "dep:md5", "dep:walkdir", "dep:rayon", "dep:calamine", "dep:tokio", "dep:polars", "dep:num_cpus", "dep:reqwest", "dep:serde", "dep:urlencoding", "dep:anyhow", "dep:csv", "dep:rdstream"]
+base_cmd = [
+    "dep:indicatif", "dep:regex", "dep:md5", "dep:walkdir", "dep:rayon", "dep:calamine", "dep:tokio", "dep:polars",
+    "dep:num_cpus", "dep:reqwest", "dep:serde", "dep:urlencoding", "dep:anyhow", "dep:csv", "dep:rdstream",
+    "dep:rustc-hash"
+]
 
 [profile.release]
 opt-level = 3
@@ -61,6 +67,7 @@ strip = "none"
 
 [profile.release.package."*"]
 opt-level = 3
+
 
 [dev-dependencies]
 polars-testing = "0.55"

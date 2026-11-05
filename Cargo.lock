@@ -1090,6 +1090,8 @@ dependencies = [
  "reqwest 0.13.5",
  "rstest",
  "rstest_reuse",
+ "rust-igraph",
+ "rustc-hash",
  "serde",
  "serde_json",
  "temp_testdir",
@@ -3736,6 +3738,15 @@ dependencies = [
  "quote",
  "rand 0.8.8",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "rust-igraph"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "db2a5bc11429298d8a0ef65296672d1605b3314a3d0f673c214374e36704ad0a"
+dependencies = [
+ "thiserror",
 ]
 
 [[package]]
