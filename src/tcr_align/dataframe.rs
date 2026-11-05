@@ -520,8 +520,9 @@ fn calculate_scores(
     rng: &mut SmallRng,
 ) {
     let height = groups.height();
-    let (pb, inner_pb) = dual_progress_bars(n_replicates as u64, height as u64, Progress::Progress)
-        .expect("Failed to create dual progress bars in `calculate_scores`");
+    let (pb, inner_pb) =
+        dual_progress_bars(n_replicates as u64, Some(height as u64), Progress::Progress)
+            .expect("Failed to create dual progress bars in `calculate_scores`");
 
     let aligner = match build_protein_aligner(gap_open, gap_extend) {
         Ok(aligner) => aligner,

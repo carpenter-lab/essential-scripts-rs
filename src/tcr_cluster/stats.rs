@@ -1,8 +1,10 @@
-use crate::gliph::{Algorithm, MotifStats};
 use crate::progress::progress_bar_with_message;
+use crate::tcr_cluster::{Algorithm, MotifStats};
 use indicatif::ParallelProgressIterator;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use rayon::slice::ParallelSliceMut;
+use rustc_hash::FxHashMap;
+use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 const MOTIF_LENGTHS: [usize; 4] = [2, 3, 4, 5];
@@ -158,49 +160,106 @@ impl LogFactorialTable {
     }
 }
 
-fn get_motif_vec(seqs: &[String]) -> Vec<(&String, BTreeSet<String>)> {
-    seqs.par_iter()
-        .map(|sequence| {
-            let motifs = motifs(sequence);
-            (sequence, motifs)
-        })
-        .collect()
+/// Sorted, de-duplicated borrowed views of `seqs`.
+fn unique_sequences(seqs: &[String]) -> Vec<&str> {
+    let mut unique: Vec<&str> = seqs.iter().map(String::as_str).collect();
+    unique.par_sort_unstable();
+    unique.dedup();
+    unique
 }
 
-pub fn motif_statistics_par_iter(
+/// Fills `out` with the distinct motifs of `sequence`, borrowed from it (no allocation
+/// beyond `out`'s reused capacity). Matches the set returned by [`motifs`].
+fn distinct_motifs_into<'a>(sequence: &'a str, out: &mut Vec<&'a str>) {
+    out.clear();
+    let region = motif_region(sequence);
+    for length in MOTIF_LENGTHS {
+        if region.len() < length {
+            continue;
+        }
+        out.extend((0..=region.len() - length).filter_map(|start| region.get(start..start + length)));
+    }
+    out.sort_unstable();
+    out.dedup();
+}
+
+/// Motif -> unique sample sequences containing it, built in parallel.
+fn sample_motif_members<'a>(unique_samples: &[&'a str]) -> FxHashMap<&'a str, Vec<&'a str>> {
+    unique_samples
+        .par_iter()
+        .fold(
+            || (FxHashMap::<&str, Vec<&str>>::default(), Vec::new()),
+            |(mut map, mut scratch), &sequence| {
+                distinct_motifs_into(sequence, &mut scratch);
+                for &motif in &scratch {
+                    map.entry(motif).or_default().push(sequence);
+                }
+                (map, scratch)
+            },
+        )
+        .map(|(map, _)| map)
+        .reduce(FxHashMap::default, |a, b| {
+            let (mut big, small) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+            for (motif, members) in small {
+                big.entry(motif).or_default().extend(members);
+            }
+            big
+        })
+}
+
+/// Motif -> number of unique reference sequences containing it, restricted to motifs
+/// present in `sample_members`. Built in parallel.
+fn reference_motif_counts<'a>(
+    unique_refs: &[&'a str],
+    sample_members: &FxHashMap<&str, Vec<&str>>,
+) -> FxHashMap<&'a str, usize> {
+    unique_refs
+        .par_iter()
+        .fold(
+            || (FxHashMap::<&str, usize>::default(), Vec::new()),
+            |(mut map, mut scratch), &sequence| {
+                distinct_motifs_into(sequence, &mut scratch);
+                for &motif in &scratch {
+                    if sample_members.contains_key(motif) {
+                        *map.entry(motif).or_default() += 1;
+                    }
+                }
+                (map, scratch)
+            },
+        )
+        .map(|(map, _)| map)
+        .reduce(FxHashMap::default, |a, b| {
+            let (mut big, small) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+            for (motif, count) in small {
+                *big.entry(motif).or_default() += count;
+            }
+            big
+        })
+}
+
+/// Per-motif enrichment statistics of `sample_sequences` against `reference_sequences`.
+///
+/// Motif counting runs in parallel over borrowed `&str` slices; `String`s are only
+/// allocated for the yielded motif and its members. Items are yielded in motif order.
+pub fn motif_statistics_iter(
     sample_sequences: &[String],
     reference_sequences: &[String],
 ) -> impl ParallelIterator<Item = (String, MotifStats)> {
-    let mut sample_counts: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut reference_counts: HashMap<String, BTreeSet<String>> = HashMap::new();
-    let sample_motifs = get_motif_vec(sample_sequences);
-    for (sequence, sequence_motifs) in &sample_motifs {
-        for motif in sequence_motifs {
-            sample_counts
-                .entry(motif.clone())
-                .or_default()
-                .insert((*sequence).clone());
-        }
-    }
-    let sample_motifs_set: HashSet<String> = sample_counts.keys().cloned().collect();
-    let reference_motifs = get_motif_vec(reference_sequences);
+    let unique_samples = unique_sequences(sample_sequences);
+    let unique_refs = unique_sequences(reference_sequences);
+    let sample_members = sample_motif_members(&unique_samples);
+    let reference_counts = reference_motif_counts(&unique_refs, &sample_members);
 
-    for (sequence, sequence_motifs) in reference_motifs {
-        for motif in sequence_motifs {
-            if sample_motifs_set.contains(&motif) {
-                reference_counts
-                    .entry(motif)
-                    .or_default()
-                    .insert(sequence.clone());
-            }
-        }
-    }
+    let mut sample_counts: Vec<(&str, Vec<&str>)> = sample_members.into_iter().collect();
+    sample_counts.par_sort_unstable_by_key(|&(motif, _)| motif);
 
     let total_samples = sample_sequences.len();
     let total_refs = reference_sequences.len();
     let log_fact_table = LogFactorialTable::new(total_refs + total_samples);
     sample_counts.into_par_iter().map(move |(motif, members)| {
-        let reference_count = reference_counts.get(&motif).map_or(0, |s| s.len());
+        let reference_count = reference_counts.get(motif).copied().unwrap_or(0);
+        let members: BTreeSet<String> = members.into_iter().map(str::to_owned).collect();
+        let motif = motif.to_owned();
         let observed = members.len();
         // let fisher = hypergeometric_tail(
         //     total_samples + total_refs,
@@ -240,18 +299,20 @@ fn get_p_value_and_fc_sim(
     let progress = progress_bar_with_message(
         reference_sequences.len(),
         "Preparing GLIPH1 reference motifs",
+        true,
+        true,
     )
     .expect("Failed to create progress bar for GLIPH1 reference motifs");
     let reference_motifs: Vec<BTreeSet<String>> = reference_sequences
         .par_iter()
-        .progress_with(progress)
         .map(|x| motifs(x))
+        .progress_with(progress)
         .collect();
     // progress.finish_with_message("GLIPH1 reference motifs ready");
 
     let observed = stat.members.len();
     let simulations = sim_depth.max(1);
-    let mut rng = crate::gliph::analysis::seeded_random(motif);
+    let mut rng = crate::tcr_cluster::seeded_random(motif);
     let sample_size = sample_sequences.len();
     let mut total = 0_usize;
     let mut extreme = 0_usize;
@@ -259,7 +320,7 @@ fn get_p_value_and_fc_sim(
         let mut sampled_count = 0_usize;
         for _ in 0..sample_size {
             let index =
-                crate::gliph::analysis::random_uniform_index(&mut rng, reference_sequences.len());
+                crate::tcr_cluster::random_uniform_index(&mut rng, reference_sequences.len());
             if reference_motifs[index].contains(motif) {
                 sampled_count += 1;
             }
@@ -307,6 +368,41 @@ pub fn motif_region(sequence: &str) -> &str {
         &sequence[3..sequence.len() - 3]
     } else {
         ""
+    }
+}
+
+/// True if `pattern` (with `%` matching any single residue) occurs in the sequence's motif region.
+fn pattern_matches(region: &[u8], pattern: &[u8]) -> bool {
+    pattern.len() <= region.len()
+        && region
+            .windows(pattern.len())
+            .any(|w| w.iter().zip(pattern).all(|(&r, &p)| p == b'%' || p == r))
+}
+
+/// One-sided Fisher p-value for an arbitrary-length pattern (`%` = wildcard),
+/// comparing unique sample sequences against the reference.
+pub fn pattern_fisher(
+    pattern: &str,
+    sample_sequences: &[String],
+    reference_sequences: &[String],
+    table: &LogFactorialTable,
+) -> f64 {
+    let pat = pattern.as_bytes();
+    let count = |seqs: &[String]| {
+        seqs.par_iter()
+            .filter(|s| pattern_matches(motif_region(s).as_bytes(), pat))
+            .count()
+    };
+    let observed = count(sample_sequences);
+    let reference = count(reference_sequences);
+    match ContingencyTable2x2::from_reported_counts(
+        observed,
+        sample_sequences.len(),
+        reference,
+        reference_sequences.len(),
+    ) {
+        Ok(t) => table.fishers_exact(&t).0,
+        Err(_) => 1.0,
     }
 }
 
@@ -443,6 +539,41 @@ mod tests {
         assert!((0.0..=1.0).contains(&p_enrich));
         assert!((0.0..=1.0).contains(&p_two));
         assert!(table.odds_ratio() > 1.0);
+    }
+
+    #[test]
+    fn borrowed_motifs_match_owned_motifs() {
+        let mut scratch = Vec::new();
+        for seq in ["CASSIRSSYEQYF", "CASSLGQAYEQYF", "CASSSSSSF", "CAS", "CASSF"] {
+            distinct_motifs_into(seq, &mut scratch);
+            let borrowed: BTreeSet<String> = scratch.iter().map(|m| m.to_string()).collect();
+            assert_eq!(borrowed, motifs(seq), "motif sets differ for {seq}");
+            assert_eq!(borrowed.len(), scratch.len(), "scratch not deduplicated for {seq}");
+        }
+    }
+
+    #[test]
+    fn motif_statistics_counts_unique_sequences() {
+        let to_vec = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // Duplicate sample sequence must only count once as a member.
+        let sample = to_vec(&["CASSIRSSYEQYF", "CASSIRSSYEQYF", "CASSLGQAYEQYF"]);
+        let reference = to_vec(&["CASSIRSTYEQYF", "CASSPGQAYEQYF", "CASSPGQAYEQYF"]);
+        let stats: Vec<(String, MotifStats)> =
+            motif_statistics_iter(&sample, &reference).collect();
+
+        let motifs_in_order: Vec<&String> = stats.iter().map(|(m, _)| m).collect();
+        let mut sorted = motifs_in_order.clone();
+        sorted.sort();
+        assert_eq!(motifs_in_order, sorted, "motifs must be yielded in sorted order");
+
+        let get = |m: &str| &stats.iter().find(|(k, _)| k == m).unwrap().1;
+        assert_eq!(get("SIRS").members.len(), 1);
+        assert_eq!(get("SS").members.len(), 1); // only CASSIRSSYEQYF has SS in its region
+        assert_eq!(get("GQA").members.len(), 1);
+        assert_eq!(get("YE").members.len(), 2);
+        // GQA appears in one unique reference sequence (the duplicate counts once):
+        // fold_change = (1 / (1 + 0.01)) / 3 * 3
+        assert!((get("GQA").fold_change - 1.0 / 1.01).abs() < 1e-12);
     }
 
     #[test]

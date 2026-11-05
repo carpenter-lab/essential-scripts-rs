@@ -11,8 +11,8 @@ pub mod tcr_align;
 
 pub mod cache;
 pub mod dryad;
-pub mod gliph;
 pub mod progress;
+pub mod tcr_cluster;
 pub mod tcrmatch;
 #[cfg(test)]
 pub mod test_helpers;

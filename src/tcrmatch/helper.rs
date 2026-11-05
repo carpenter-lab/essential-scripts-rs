@@ -1,5 +1,4 @@
 use crate::cache;
-use crate::progress::progress_bar_with_message;
 use clap::ValueEnum;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};

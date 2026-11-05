@@ -1,4 +1,6 @@
+use anyhow::bail;
 use clap::ValueEnum;
+use std::collections::HashMap;
 
 pub const BLOSUM_ORDER: &[u8; 20] = b"ARNDCQEGHILKMFPSTWYV";
 const BLOSUM62: [[i8; 20]; 20] = [
@@ -64,7 +66,7 @@ const BLOSUM62: [[i8; 20]; 20] = [
     ],
 ];
 
-pub const TCR_BLOSUM: [[i8; 20]; 20] = [
+const TCR_BLOSUM: [[i8; 20]; 20] = [
     [
         0, 0, 0, 0, -5, 0, -1, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0,
     ],
@@ -125,16 +127,47 @@ pub enum AminoAcidSubMatrix {
     Tcr,
 }
 
+impl AminoAcidSubMatrix {
+    fn get_score(&self, left: &u8, right: &u8) -> anyhow::Result<i8> {
+        let matrix = match self {
+            AminoAcidSubMatrix::Blosum62 => BLOSUM62,
+            AminoAcidSubMatrix::Tcr => TCR_BLOSUM,
+        };
+        let Some(left_index) = BLOSUM_ORDER.iter().position(|value| *value == *left) else {
+            bail!("Invalid amino acid character: {}", left);
+        };
+        let Some(right_index) = BLOSUM_ORDER.iter().position(|value| *value == *right) else {
+            bail!("Invalid amino acid character: {}", right);
+        };
+        Ok(matrix[left_index][right_index])
+    }
+
+    /// Maps a traditional substitution matrix (like BLOSUM62) into a mismatch distance matrix
+    /// as defined by the Dash et al. (tcrdist) approach.
+    pub fn build_mismatch_matrix(&self, max_value: i32) -> HashMap<(u8, u8), i32> {
+        let mut distance_matrix: HashMap<(u8, u8), i32> =
+            HashMap::with_capacity(BLOSUM_ORDER.len() * BLOSUM_ORDER.len());
+
+        for a in BLOSUM_ORDER {
+            for b in BLOSUM_ORDER {
+                if a == b {
+                    distance_matrix.insert((*a, *b), 0);
+                } else {
+                    let blosum_score: i32 = self.get_score(a, b).unwrap_or(0).into();
+                    // tcrdist formula: min(max_val, max_val - score)
+                    let dist = std::cmp::min(max_value, max_value - blosum_score);
+                    distance_matrix.insert((*a, *b), dist);
+                }
+            }
+        }
+        distance_matrix
+    }
+}
+
 pub fn blosum_nonnegative(left: u8, right: u8, blosum: &AminoAcidSubMatrix) -> bool {
-    let matrix = match blosum {
-        AminoAcidSubMatrix::Blosum62 => BLOSUM62,
-        AminoAcidSubMatrix::Tcr => TCR_BLOSUM,
-    };
-    let Some(left_index) = BLOSUM_ORDER.iter().position(|value| *value == left) else {
-        return false;
-    };
-    let Some(right_index) = BLOSUM_ORDER.iter().position(|value| *value == right) else {
-        return false;
-    };
-    matrix[left_index][right_index] >= 0
+    blosum.get_score(&left, &right).is_ok_and(|x| x >= 0)
+}
+
+pub fn is_amino_acid_sequence(sequence: &str) -> bool {
+    sequence.bytes().all(|aa| BLOSUM_ORDER.contains(&aa))
 }

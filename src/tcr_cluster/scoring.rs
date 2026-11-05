@@ -1,7 +1,6 @@
-use crate::gliph::RoundDecimal;
-use crate::gliph::analysis::{random_uniform_index, seeded_random};
-use crate::gliph::stats::{ContingencyTable2x2, LogFactorialTable};
-use crate::gliph::types::*;
+use crate::tcr_cluster::model::*;
+use crate::tcr_cluster::stats::{ContingencyTable2x2, LogFactorialTable};
+use crate::tcr_cluster::{RoundDecimal, random_uniform_index, seeded_random};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
@@ -90,15 +89,16 @@ pub fn expansion_score(
     let bg_len = exp_ctx.log_background.len();
 
     // 1. Direct O(K) lookup of cluster members (No full repertoire scanning)
-    let mut observed_log_sum = 0.0;
-    let mut cluster_size = 0;
-
-    for &seq in member_sequences {
-        if let Some(&count) = exp_ctx.repertoire_counts.get(seq) {
-            observed_log_sum += count.ln_1p();
-            cluster_size += 1;
-        }
-    }
+    // Summed in sorted order: `member_sequences` is a HashSet whose iteration order changes
+    // per process, and float addition is not associative, so an unordered sum would differ in
+    // its last bits between runs.
+    let mut observed_logs: Vec<f64> = member_sequences
+        .iter()
+        .filter_map(|&seq| exp_ctx.repertoire_counts.get(seq).map(|count| count.ln_1p()))
+        .collect();
+    observed_logs.sort_by(f64::total_cmp);
+    let cluster_size = observed_logs.len();
+    let observed_log_sum: f64 = observed_logs.iter().sum();
 
     if cluster_size == 0 || bg_len < cluster_size {
         return 1.0;
@@ -107,6 +107,9 @@ pub fn expansion_score(
     let simulations = simulations.max(1);
     let mut rng = seeded_random(seed);
     let mut at_least_as_extreme = 0;
+    // Ties are common (most counts are 1, so sums are k·ln 2) and must count as "at least as
+    // extreme"; the tolerance stops summation rounding from deciding them.
+    let tie_threshold = observed_log_sum - 1e-9 * observed_log_sum.abs().max(1.0);
 
     // 2. CRITICAL: Allocate the scratch buffer ONCE outside the loop
     let mut sampled: Vec<usize> = Vec::with_capacity(cluster_size);
@@ -128,7 +131,7 @@ pub fn expansion_score(
         let simulated_log_sum: f64 = sampled.iter().map(|&idx| exp_ctx.log_background[idx]).sum();
 
         // 4. Compare raw sums directly (avoids float division)
-        if simulated_log_sum >= observed_log_sum {
+        if simulated_log_sum >= tie_threshold {
             at_least_as_extreme += 1;
         }
     }
@@ -137,15 +140,15 @@ pub fn expansion_score(
     (at_least_as_extreme as f64 / sims_f).max(1.0 / sims_f)
 }
 
-pub fn sample_scores(
-    cluster_record: &ClusterRecord,
-    reference: &ReferenceData,
-    algorithm: Algorithm,
-    sim_depth: usize,
-    precomputed_size_col: Option<usize>,
-    hla_context: &HlaContext,
-    exp_ctx: &ExpansionContext,
-) -> SampleScore {
+pub fn score_cluster(ctx: &ScoringContext, cluster_record: &ClusterMembers) -> ClusterScore {
+    let ScoringContext {
+        reference,
+        algorithm,
+        sim_depth,
+        hla: hla_context,
+        expansion: exp_ctx,
+        size_column: precomputed_size_col,
+    } = *ctx;
     // Cluster size score using precalculated column index
     let size_index = cluster_record
         .cluster
@@ -183,8 +186,7 @@ pub fn sample_scores(
     let v_values: Vec<String> = cluster_record
         .records
         .iter()
-        .map(|record| record.v_gene.clone())
-        .filter(|gene| !gene.is_empty())
+        .filter_map(|record| record.v_gene.clone())
         .collect();
 
     let v_score = if v_values.is_empty() {
@@ -218,7 +220,7 @@ pub fn sample_scores(
 
     let final_score = cluster_size * length_score * v_score * expansion_score * hla * scale;
 
-    SampleScore {
+    ClusterScore {
         final_score,
         hla_score: hla,
         vb_score: v_score,
@@ -229,7 +231,7 @@ pub fn sample_scores(
     }
 }
 
-fn hla_score(records: &ClusterRecord, ctx: &HlaContext) -> (f64, Vec<(usize, String)>) {
+fn hla_score(records: &ClusterMembers, ctx: &HlaContext) -> (f64, Vec<(usize, String)>) {
     if ctx.population_size == 0 {
         return (1.0, Vec::new());
     }
@@ -298,6 +300,23 @@ fn hla_score(records: &ClusterRecord, ctx: &HlaContext) -> (f64, Vec<(usize, Str
 mod tests {
     use super::*;
 
+    #[test]
+    fn expansion_score_counts_ties_as_extreme() {
+        // Every count is 1, so every simulated sum ties the observed one exactly
+        // (up to summation rounding) and must count as at-least-as-extreme.
+        let records: Vec<ChainRecord> = (0..50)
+            .map(|i| ChainRecord {
+                beta: format!("CASS{i:03}EQYF"),
+                counts: Some(1.0),
+                ..Default::default()
+            })
+            .collect();
+        let exp_ctx = ExpansionContext::build(&records);
+        let members: HashSet<&str> = records[..7].iter().map(|r| r.beta.as_str()).collect();
+
+        assert_eq!(expansion_score(&members, &exp_ctx, 1000, "ties"), 1.0);
+    }
+
     fn record(subject: &str, beta: &str, dpa1: &str) -> ChainRecord {
         let mut hla: [String; 8] = Default::default();
         hla[0] = dpa1.to_owned();
@@ -326,7 +345,7 @@ mod tests {
             member_sequences: vec!["CASSAAF".to_owned()],
         };
         let ctx = HlaContext::build(&records, 0.05);
-        let cluster_record = ClusterRecord::new(&records, &cluster);
+        let cluster_record = ClusterMembers::new(&records, &cluster);
 
         let (score, hits) = hla_score(&cluster_record, &ctx);
 

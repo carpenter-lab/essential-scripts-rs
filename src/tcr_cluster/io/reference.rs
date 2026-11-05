@@ -1,6 +1,6 @@
 use crate::cache;
-use crate::gliph::References;
-use crate::gliph::types::ReferenceData;
+use crate::tcr_cluster::References;
+use crate::tcr_cluster::model::ReferenceData;
 use anyhow::{Context, Result, bail};
 use rdstream::{Document, RObject, Rules, Value};
 use std::path::Path;
@@ -221,7 +221,7 @@ pub fn load_reference(
 #[cfg(test)]
 mod tests {
     use super::{load_reference, numeric_vector};
-    use crate::gliph::References;
+    use crate::tcr_cluster::References;
     use rdstream::{RObject, Value};
 
     #[test]

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap_binary_enum::YesNoArg;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -38,11 +39,10 @@ impl SetDrawTarget<FileByteProgress> for Progress {
     }
 }
 
-const BYTE_PROGRESS_TEMPLATE: &str =
-    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} {msg} ({eta})";
+const BYTE_PROGRESS_TEMPLATE: &str = "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} {msg} ETA: {eta}";
 const OUTER_PROGRESS_TEMPLATE: &str =
-    "{msg} [{bar:40.cyan/blue}] {pos}/{len} Elapsed: {elapsed_precise} ETA: {eta}";
-const INNER_PROGRESS_TEMPLATE: &str = "\x1b[37m{msg}\x1b[0m [{bar:40.cyan/blue}] {pos}/{len}";
+    "{msg:<40} [{bar:40.cyan/blue}] {pos}/{len} Elapsed: {elapsed_precise} ETA: {eta}";
+const INNER_PROGRESS_TEMPLATE: &str = "\x1b[37m{msg:<40}\x1b[0m [{bar:40.cyan/blue}] {pos}/{len}";
 
 pub struct FileByteProgress {
     pb: ProgressBar,
@@ -92,31 +92,52 @@ pub fn byte_and_file_progress_bar(
 
 pub fn dual_progress_bars(
     outer_len: u64,
-    inner_len: u64,
+    inner_len: Option<u64>,
     visibility: Progress,
 ) -> Result<(ProgressBar, ProgressBar)> {
-    let outer_style = ProgressStyle::with_template(OUTER_PROGRESS_TEMPLATE)?;
-    let inner_style = ProgressStyle::with_template(INNER_PROGRESS_TEMPLATE)?;
+    let outer_style = ProgressStyle::with_template(OUTER_PROGRESS_TEMPLATE)?.progress_chars("=> ");
+    let inner_style = ProgressStyle::with_template(INNER_PROGRESS_TEMPLATE)?.progress_chars("=> ");
 
     let mp = MultiProgress::new();
     let outer = mp.add(ProgressBar::new(outer_len));
     outer.set_style(outer_style);
 
-    let inner = mp.add(ProgressBar::new(inner_len));
+    let inner = if let Some(len) = inner_len {
+        mp.add(ProgressBar::new(len))
+    } else {
+        mp.add(ProgressBar::no_length())
+    };
     inner.set_style(inner_style);
     visibility.apply(&mp);
 
     Ok((outer, inner))
 }
 
-pub fn progress_bar_with_message(length: usize, message: &str) -> Result<ProgressBar> {
+pub enum ProgressSettings {
+    Position,
+    Percent,
+    PositionSpeed,
+    PercentSpeed,
+}
+
+pub fn progress_bar_with_message(
+    length: usize,
+    message: &str,
+    position: bool,
+    speed: bool,
+) -> Result<ProgressBar> {
     let progress = ProgressBar::new(length as u64);
-    progress.set_style(
-        ProgressStyle::with_template(
-            "{msg:<36} [{bar:40.cyan/blue}] {human_pos:>7}/{human_len} ({eta}) {per_sec}",
-        )?
-        .progress_chars("=> "),
-    );
+    let mut template = String::from_str("{msg:<40} [{bar:40.cyan/blue}]")?;
+    if position {
+        template.push_str(" {human_pos:>7}/{human_len}");
+    } else {
+        template.push_str(" {percent}%")
+    }
+    template.push_str(" ETA: {eta}");
+    if speed {
+        template.push_str(" {per_sec}");
+    }
+    progress.set_style(ProgressStyle::with_template(&template)?.progress_chars("=> "));
     progress.set_message(message.to_owned());
     Ok(progress)
 }
@@ -147,7 +168,7 @@ mod test {
     #[case::progress(Progress::Progress)]
     #[case::no_progress(Progress::NoProgress)]
     fn test_dual_progress_bars(#[case] progress: Progress) {
-        let (outer, inner) = dual_progress_bars(1000, 1000, progress).unwrap();
+        let (outer, inner) = dual_progress_bars(1000, Some(1000), progress).unwrap();
         assert_eq!(outer.length(), Some(1000));
         assert_eq!(inner.length(), Some(1000));
     }

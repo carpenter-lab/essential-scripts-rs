@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::builder::RangedI64ValueParser;
 use thiserror::Error;
 
@@ -67,6 +68,14 @@ pub fn thread_default() -> i32 {
 #[cfg(not(feature = "base_cmd"))]
 pub fn thread_parser() -> RangedI64ValueParser<i32> {
     clap::value_parser!(i32).range(-1..1)
+}
+
+#[cfg(feature = "base_cmd")]
+pub fn build_pool(cores: usize) -> anyhow::Result<rayon::ThreadPool> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(cores)
+        .build()
+        .context("Failed to build thread pool")
 }
 
 #[cfg(test)]

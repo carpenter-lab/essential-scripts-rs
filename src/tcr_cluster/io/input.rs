@@ -1,4 +1,4 @@
-use crate::gliph::types::*;
+use crate::tcr_cluster::model::*;
 use anyhow::{Context, Result, bail};
 use csv::{ReaderBuilder, StringRecord};
 use std::collections::HashMap;
@@ -14,8 +14,11 @@ fn required_index(headers: &StringRecord, name: &str, path: &Path) -> Result<usi
         .with_context(|| format!("Missing required column '{name}' in {}", path.display()))
 }
 
-fn cell(record: &StringRecord, index: Option<usize>) -> &str {
-    index.and_then(|i| record.get(i)).unwrap_or("").trim()
+fn cell(record: &StringRecord, index: Option<usize>) -> Option<&str> {
+    index
+        .and_then(|i| record.get(i))
+        .map(str::trim)
+        .filter(|&s| !s.eq_ignore_ascii_case("NA"))
 }
 
 fn read_tsv(path: &Path) -> Result<csv::Reader<File>> {
@@ -43,14 +46,14 @@ fn read_hla(path: &Path) -> Result<HashMap<String, HlaRecord>> {
                 path.display()
             )
         })?;
-        let subject = cell(&row, Some(0)).to_owned();
-        if subject.is_empty() {
-            bail!(
+        let subject = match cell(&row, Some(0)) {
+            Some(s) => s,
+            None => bail!(
                 "Empty subject on HLA row {} in {}",
                 row_index + 2,
                 path.display()
-            );
-        }
+            ),
+        };
         if row.len() > 13 {
             bail!(
                 "HLA row {} in {} has {} columns, expected at most 13 (subject plus 12 allele columns)",
@@ -61,7 +64,7 @@ fn read_hla(path: &Path) -> Result<HashMap<String, HlaRecord>> {
         }
         let alleles = group_alleles(&row);
         if by_subject
-            .insert(subject.clone(), HlaRecord { alleles })
+            .insert(subject.to_string(), HlaRecord { alleles })
             .is_some()
         {
             bail!(
@@ -82,22 +85,24 @@ fn group_alleles(row: &StringRecord) -> [String; 8] {
     let mut groups: [Vec<&str>; 8] = Default::default();
     for column in 1..13 {
         let value = cell(row, Some(column));
-        if value.is_empty() || value.eq_ignore_ascii_case("NA") {
+        if value.is_none() {
             continue;
         }
-        let locus = match column {
-            1 | 2 => 0,
-            3 | 4 => 1,
-            5 | 6 => 2,
-            7 | 8 => 3,
-            9 | 10 => 4,
-            _ if value.starts_with("DRB3") => 5,
-            _ if value.starts_with("DRB4") => 6,
-            _ if value.starts_with("DRB5") => 7,
-            _ => continue,
-        };
-        if !groups[locus].contains(&value) {
-            groups[locus].push(value);
+        if let Some(v) = value {
+            let locus = match column {
+                1 | 2 => 0,
+                3 | 4 => 1,
+                5 | 6 => 2,
+                7 | 8 => 3,
+                9 | 10 => 4,
+                _ if v.starts_with("DRB3") => 5,
+                _ if v.starts_with("DRB4") => 6,
+                _ if v.starts_with("DRB5") => 7,
+                _ => continue,
+            };
+            if !groups[locus].contains(&v) {
+                groups[locus].push(v);
+            }
         }
     }
     groups.map(|alleles| alleles.join("/"))
@@ -115,6 +120,14 @@ pub fn read_chain_inputs(chains_path: &Path, hla_path: Option<&Path>) -> Result<
     let alpha_index = header_index(&headers, "CDR3a");
     let v_index = header_index(&headers, "TRBV");
     let j_index = header_index(&headers, "TRBJ");
+    // Alpha genes are optional; without these columns only the beta genes are used.
+    let va_index = header_index(&headers, "TRAV");
+    let ja_index = header_index(&headers, "TRAJ");
+    let gene = |row: &StringRecord, index: Option<usize>| {
+        cell(row, index)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
     let counts_index = header_index(&headers, "count");
     let mut chains = Vec::new();
 
@@ -127,26 +140,31 @@ pub fn read_chain_inputs(chains_path: &Path, hla_path: Option<&Path>) -> Result<
             )
         })?;
         let subject_condition = cell(&row, Some(subject_condition_index));
-        let (subject, condition) = subject_condition.split_once(':').with_context(|| {
-            format!(
-                "Expected 'subject:condition' value on chain row {} in {}",
-                row_index + 2,
-                chains_path.display()
-            )
-        })?;
+        let (subject, condition) = subject_condition
+            .and_then(|sc| {
+                sc.split_once(':')
+                    .map(|(s, c)| (s.trim().to_owned(), c.trim().to_owned()))
+            })
+            .with_context(|| {
+                format!(
+                    "Expected 'subject:condition' value on chain row {} in {}",
+                    row_index + 2,
+                    chains_path.display()
+                )
+            })?;
         let subject = subject.trim().to_owned();
         let condition = condition.trim().to_owned();
-        let beta = cell(&row, Some(beta_index)).to_ascii_uppercase();
+        let beta = match cell(&row, Some(beta_index)) {
+            Some(b) => b.to_ascii_uppercase(),
+            None => bail!(
+                "Empty TcRb on chain row {} in {}",
+                row_index + 2,
+                chains_path.display()
+            ),
+        };
         if subject.is_empty() || condition.is_empty() {
             bail!(
                 "Empty subject or condition in 'subject:condition' on chain row {} in {}",
-                row_index + 2,
-                chains_path.display()
-            );
-        }
-        if beta.is_empty() {
-            bail!(
-                "Empty TcRb on chain row {} in {}",
                 row_index + 2,
                 chains_path.display()
             );
@@ -157,24 +175,25 @@ pub fn read_chain_inputs(chains_path: &Path, hla_path: Option<&Path>) -> Result<
         let counts = counts_index
             .map(|index| {
                 let value = cell(&row, Some(index));
-                if value.is_empty() {
-                    Ok(1.0)
-                } else {
-                    let parsed = value.parse::<f64>().with_context(|| {
-                        format!(
-                            "Invalid counts value '{value}' on chain row {} in {}",
-                            row_index + 2,
-                            chains_path.display()
-                        )
-                    })?;
-                    if !parsed.is_finite() || parsed < 0.0 {
-                        bail!(
-                            "Counts must be a finite non-negative number on chain row {} in {}",
-                            row_index + 2,
-                            chains_path.display()
-                        );
+                match value {
+                    Some(value) => {
+                        let parsed = value.parse::<f64>().with_context(|| {
+                            format!(
+                                "Invalid counts value '{value}' on chain row {} in {}",
+                                row_index + 2,
+                                chains_path.display()
+                            )
+                        })?;
+                        if !parsed.is_finite() || parsed < 0.0 {
+                            bail!(
+                                "Counts must be a finite non-negative number on chain row {} in {}",
+                                row_index + 2,
+                                chains_path.display()
+                            );
+                        }
+                        Ok(parsed)
                     }
-                    Ok(parsed)
+                    None => Ok(1.0),
                 }
             })
             .transpose()?;
@@ -183,9 +202,11 @@ pub fn read_chain_inputs(chains_path: &Path, hla_path: Option<&Path>) -> Result<
             subject,
             condition,
             beta,
-            alpha: cell(&row, alpha_index).to_owned(),
-            v_gene: cell(&row, v_index).to_owned(),
-            j_gene: cell(&row, j_index).to_owned(),
+            alpha: cell(&row, alpha_index).map(|s| s.to_owned()),
+            v_gene: gene(&row, v_index),
+            j_gene: gene(&row, j_index),
+            va_gene: gene(&row, va_index),
+            ja_gene: gene(&row, ja_index),
             counts,
             hla: hla.map_or_else(Default::default, |hla| hla.alleles.clone()),
         });
@@ -300,5 +321,41 @@ mod tests {
         fs::write(&chains, "subject:condition\tCDR3b\nS1\tCASSIRSSYEQYF\n").unwrap();
 
         assert!(read_chain_inputs(&chains, None).is_err());
+    }
+
+    #[test]
+    fn reads_optional_alpha_genes_as_given() {
+        let temp = tempdir().unwrap();
+        let chains = temp.path().join("chains.tsv");
+        fs::write(
+            &chains,
+            "subject:condition\tCDR3b\tTRBV\tTRBJ\tCDR3a\tTRAV\tTRAJ\n\
+             S1:case\tCASSIRSSYEQYF\tTRBV9\tTRBJ2-1\tCAVRDSNYQLIW\tTRAV12-2\tTRAJ33*01\n\
+             S2:case\tCASSPRSSYEQYF\tTRBV9\tTRBJ2-1\t\tNA\t\n",
+        )
+        .unwrap();
+
+        let records = read_chain_inputs(&chains, None).unwrap();
+
+        assert_eq!(records[0].va_gene.as_deref(), Some("TRAV12-2"));
+        assert_eq!(records[0].ja_gene.as_deref(), Some("TRAJ33*01"));
+        assert_eq!(records[1].va_gene, None);
+        assert_eq!(records[1].ja_gene, None);
+    }
+
+    #[test]
+    fn missing_alpha_gene_columns_default_to_beta_only() {
+        let temp = tempdir().unwrap();
+        let chains = temp.path().join("chains.tsv");
+        fs::write(
+            &chains,
+            "subject:condition\tCDR3b\tTRBV\tTRBJ\nS1:case\tCASSIRSSYEQYF\tTRBV9\tTRBJ2-1\n",
+        )
+        .unwrap();
+
+        let records = read_chain_inputs(&chains, None).unwrap();
+
+        assert_eq!(records[0].v_gene.as_deref(), Some("TRBV9"));
+        assert!(!records[0].has_alpha_genes());
     }
 }

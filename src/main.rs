@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand};
 mod docs;
 
 use essential_scripts_rs::{
-    aggregate, copy_cellranger_outs, dryad, enrich, geo_submission, gliph, plate_reader, split,
-    tcr_align, tcrmatch, underlying_clap_error_kind,
+    aggregate, copy_cellranger_outs, dryad, enrich, geo_submission, plate_reader, split, tcr_align,
+    tcr_cluster, tcrmatch, underlying_clap_error_kind,
 };
 
 #[derive(Parser)]
@@ -44,7 +44,7 @@ enum Commands {
     Dryad(dryad::Commands),
 
     #[command(flatten)]
-    Gliph(gliph::Commands),
+    Gliph(tcr_cluster::Commands),
 
     #[command(flatten)]
     TcrMatch(tcrmatch::Commands),
@@ -61,7 +61,7 @@ pub(crate) fn main_helper(cli: Cli) {
         Some(Commands::MatchFastq(cmd)) => geo_submission::handle_command(&cmd),
         Some(Commands::RunEnrichr(cmd)) => enrich::handle_command(cmd),
         Some(Commands::Dryad(cmd)) => dryad::handle_command(cmd),
-        Some(Commands::Gliph(cmd)) => gliph::handle_command(cmd),
+        Some(Commands::Gliph(cmd)) => tcr_cluster::handle_command(cmd),
         Some(Commands::TcrMatch(cmd)) => tcrmatch::handle_command(cmd),
         None => Ok(()),
     };
@@ -97,7 +97,7 @@ fn main() {
 
     if args.markdown_help {
         match docs::write_docs_to_file::<Cli>("docs/cli.md") {
-            Ok(_) => {
+            Ok(()) => {
                 println!("Markdown help written to docs/cli.md");
                 std::process::exit(0);
             }
