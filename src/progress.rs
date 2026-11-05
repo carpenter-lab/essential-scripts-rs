@@ -1,6 +1,9 @@
 use anyhow::Result;
 use clap_binary_enum::YesNoArg;
-use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
+use indicatif::{
+    HumanCount, MultiProgress, ProgressBar, ProgressDrawTarget, ProgressState, ProgressStyle,
+};
+use std::cmp::PartialEq;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -113,6 +116,7 @@ pub fn dual_progress_bars(
     Ok((outer, inner))
 }
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum ProgressSettings {
     Position,
     Percent,
@@ -123,21 +127,29 @@ pub enum ProgressSettings {
 pub fn progress_bar_with_message(
     length: usize,
     message: &str,
-    position: bool,
-    speed: bool,
+    settings: ProgressSettings,
 ) -> Result<ProgressBar> {
     let progress = ProgressBar::new(length as u64);
     let mut template = String::from_str("{msg:<40} [{bar:40.cyan/blue}]")?;
-    if position {
+    if settings == ProgressSettings::Position || settings == ProgressSettings::PositionSpeed {
         template.push_str(" {human_pos:>7}/{human_len}");
     } else {
         template.push_str(" {percent}%")
     }
     template.push_str(" ETA: {eta}");
-    if speed {
-        template.push_str(" {per_sec}");
+    if settings == ProgressSettings::PositionSpeed || settings == ProgressSettings::PercentSpeed {
+        template.push_str(" {rate}");
     }
-    progress.set_style(ProgressStyle::with_template(&template)?.progress_chars("=> "));
+    progress.set_style(
+        ProgressStyle::with_template(&template)?
+            .progress_chars("=> ")
+            .with_key(
+                "rate",
+                |state: &ProgressState, w: &mut dyn std::fmt::Write| {
+                    let _ = write!(w, "{}/s", HumanCount(state.per_sec().round() as u64));
+                },
+            ),
+    );
     progress.set_message(message.to_owned());
     Ok(progress)
 }

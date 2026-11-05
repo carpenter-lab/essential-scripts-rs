@@ -225,8 +225,8 @@ impl ClusterFinder for TcrDist {
                 // Show that the inner bar is idle while the graph is built, instead of
                 // leaving the previous threshold's count on screen.
                 ipb.reset();
-                //ipb.set_length(0);
-                //ipb.set_message("Building graph");
+                ipb.set_length(0);
+                ipb.set_message("Building graph");
                 let graph = distance_matrix
                     .to_igraph(threshold)
                     .context("Failed to convert distance matrix to graph")?;
@@ -256,12 +256,18 @@ impl ClusterFinder for TcrDist {
         // ties) by position, so return them in a fixed order.
         let mut clusters: Vec<PairedCluster> = discovered.into_iter().collect();
         clusters.sort_unstable_by(|a, b| {
-            (a.threshold, a.cluster_id, &a.member_indices, &a.cluster.pattern).cmp(&(
-                b.threshold,
-                b.cluster_id,
-                &b.member_indices,
-                &b.cluster.pattern,
-            ))
+            (
+                a.threshold,
+                a.cluster_id,
+                &a.member_indices,
+                &a.cluster.pattern,
+            )
+                .cmp(&(
+                    b.threshold,
+                    b.cluster_id,
+                    &b.member_indices,
+                    &b.cluster.pattern,
+                ))
         });
         Ok(clusters)
     }

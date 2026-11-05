@@ -1,4 +1,5 @@
 use super::*;
+use crate::progress::ProgressSettings;
 
 pub(super) fn add_singleton_clusters(
     mut clusters: Vec<Cluster>,
@@ -13,8 +14,7 @@ pub(super) fn add_singleton_clusters(
     let pb = progress_bar_with_message(
         sample_sequences.len(),
         "Adding singleton clusters",
-        true,
-        true,
+        ProgressSettings::PositionSpeed,
     )
     .expect("Failed to create progress bar for adding singleton clusters");
 

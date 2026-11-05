@@ -1,6 +1,6 @@
 //! The shared find → score → format pipeline used by every clustering algorithm.
 
-use crate::progress::progress_bar_with_message;
+use crate::progress::{ProgressSettings, progress_bar_with_message};
 use crate::tcr_cluster::model::*;
 use crate::tcr_cluster::scoring::score_cluster;
 use anyhow::{Result, bail};
@@ -41,7 +41,11 @@ pub fn score_clusters<C>(
 where
     C: HasCluster + Send + Sync,
 {
-    let progress = progress_bar_with_message(clusters.len(), "Scoring clusters", true, true)?;
+    let progress = progress_bar_with_message(
+        clusters.len(),
+        "Scoring clusters",
+        ProgressSettings::PositionSpeed,
+    )?;
     let scored: Vec<ScoredCluster<C>> = clusters
         .into_par_iter()
         .enumerate()

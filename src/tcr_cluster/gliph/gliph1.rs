@@ -1,4 +1,5 @@
 use super::*;
+use crate::progress::ProgressSettings;
 
 pub(super) fn hamming(left: &str, right: &str) -> Option<usize> {
     if left.len() != right.len() {
@@ -28,8 +29,7 @@ pub(super) fn gliph1_candidates(
     let progress = progress_bar_with_message(
         candidates.len() + sample_sequences.len(),
         "Clustering GLIPH1 network",
-        true,
-        true,
+        ProgressSettings::PositionSpeed,
     )
     .expect("Failed to create progress bar for GLIPH1 network");
     for cluster in candidates.drain(..) {

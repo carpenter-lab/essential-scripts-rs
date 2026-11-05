@@ -1,4 +1,5 @@
 use super::*;
+use crate::progress::ProgressSettings;
 
 pub(super) fn local_candidates(
     method: Algorithm,
@@ -12,8 +13,7 @@ pub(super) fn local_candidates(
     let pb = progress_bar_with_message(
         sample_sequences.len(),
         "Testing motif enrichment",
-        true,
-        true,
+        ProgressSettings::PositionSpeed,
     )
     .expect("Failed to create progress bar for motif enrichment testing");
     let tic = std::time::Instant::now();

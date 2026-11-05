@@ -1,7 +1,7 @@
 // Exact match to old distance.rs
 
 use super::lookup_cdr_seqs::{GAP, VGeneCdrs};
-use crate::progress::progress_bar_with_message;
+use crate::progress::{ProgressSettings, progress_bar_with_message};
 use anyhow::Context;
 use rayon::prelude::*;
 use rust_igraph::Graph;
@@ -448,8 +448,7 @@ fn compute_lower_triangle_matrix_simd_u8<const LANES: usize>(
     let pb = progress_bar_with_message(
         total_pairs,
         &format!("Computing distances on {} sequences", name),
-        false,
-        false,
+        ProgressSettings::Percent,
     )?;
     let pending_progress = AtomicUsize::new(0);
 
@@ -623,8 +622,7 @@ pub fn add_germline_distances(
     let pb = progress_bar_with_message(
         n - 1,
         &format!("Computing distances on {name}"),
-        false,
-        false,
+        ProgressSettings::Percent,
     )?;
     let mut rows: Vec<(usize, &mut [u8])> = Vec::with_capacity(n - 1);
     let mut remainder = total.distances.as_mut_slice();

@@ -1,4 +1,4 @@
-use crate::progress::progress_bar_with_message;
+use crate::progress::{ProgressSettings, progress_bar_with_message};
 use crate::tcr_cluster::{Algorithm, MotifStats};
 use indicatif::ParallelProgressIterator;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
@@ -177,7 +177,9 @@ fn distinct_motifs_into<'a>(sequence: &'a str, out: &mut Vec<&'a str>) {
         if region.len() < length {
             continue;
         }
-        out.extend((0..=region.len() - length).filter_map(|start| region.get(start..start + length)));
+        out.extend(
+            (0..=region.len() - length).filter_map(|start| region.get(start..start + length)),
+        );
     }
     out.sort_unstable();
     out.dedup();
@@ -299,8 +301,7 @@ fn get_p_value_and_fc_sim(
     let progress = progress_bar_with_message(
         reference_sequences.len(),
         "Preparing GLIPH1 reference motifs",
-        true,
-        true,
+        ProgressSettings::PositionSpeed,
     )
     .expect("Failed to create progress bar for GLIPH1 reference motifs");
     let reference_motifs: Vec<BTreeSet<String>> = reference_sequences
@@ -544,11 +545,21 @@ mod tests {
     #[test]
     fn borrowed_motifs_match_owned_motifs() {
         let mut scratch = Vec::new();
-        for seq in ["CASSIRSSYEQYF", "CASSLGQAYEQYF", "CASSSSSSF", "CAS", "CASSF"] {
+        for seq in [
+            "CASSIRSSYEQYF",
+            "CASSLGQAYEQYF",
+            "CASSSSSSF",
+            "CAS",
+            "CASSF",
+        ] {
             distinct_motifs_into(seq, &mut scratch);
             let borrowed: BTreeSet<String> = scratch.iter().map(|m| m.to_string()).collect();
             assert_eq!(borrowed, motifs(seq), "motif sets differ for {seq}");
-            assert_eq!(borrowed.len(), scratch.len(), "scratch not deduplicated for {seq}");
+            assert_eq!(
+                borrowed.len(),
+                scratch.len(),
+                "scratch not deduplicated for {seq}"
+            );
         }
     }
 
@@ -558,13 +569,15 @@ mod tests {
         // Duplicate sample sequence must only count once as a member.
         let sample = to_vec(&["CASSIRSSYEQYF", "CASSIRSSYEQYF", "CASSLGQAYEQYF"]);
         let reference = to_vec(&["CASSIRSTYEQYF", "CASSPGQAYEQYF", "CASSPGQAYEQYF"]);
-        let stats: Vec<(String, MotifStats)> =
-            motif_statistics_iter(&sample, &reference).collect();
+        let stats: Vec<(String, MotifStats)> = motif_statistics_iter(&sample, &reference).collect();
 
         let motifs_in_order: Vec<&String> = stats.iter().map(|(m, _)| m).collect();
         let mut sorted = motifs_in_order.clone();
         sorted.sort();
-        assert_eq!(motifs_in_order, sorted, "motifs must be yielded in sorted order");
+        assert_eq!(
+            motifs_in_order, sorted,
+            "motifs must be yielded in sorted order"
+        );
 
         let get = |m: &str| &stats.iter().find(|(k, _)| k == m).unwrap().1;
         assert_eq!(get("SIRS").members.len(), 1);
