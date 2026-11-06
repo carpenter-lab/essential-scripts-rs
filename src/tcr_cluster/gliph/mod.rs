@@ -92,7 +92,7 @@ impl ClusterFinder for Gliph {
             clusters.len(),
             self.algorithm
         );
-        clusters = add_singleton_clusters(clusters, &sample_sequences, &reference_sequences);
+        clusters = add_singleton_clusters(clusters, records, &reference_sequences);
         clusters.sort_unstable_by(|left, right| {
             left.fisher_score
                 .total_cmp(&right.fisher_score)

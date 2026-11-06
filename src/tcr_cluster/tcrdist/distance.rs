@@ -515,7 +515,12 @@ fn compute_lower_triangle_matrix_simd_u8<const LANES: usize>(
         }
     });
 
-    pb.finish();
+    pb.finish_and_clear();
+    eprintln!(
+        "Computed {} distances in {}",
+        name,
+        indicatif::HumanDuration(pb.elapsed())
+    );
 
     Ok(TcrDistanceMatrix::from_flat(
         flat_distances,
@@ -641,7 +646,12 @@ pub fn add_germline_distances(
         }
         pb.inc(1);
     });
-    pb.finish();
+    pb.finish_and_clear();
+    eprintln!(
+        "Computed {} germline distances in {}",
+        name,
+        indicatif::HumanDuration(pb.elapsed())
+    );
     Ok(())
 }
 

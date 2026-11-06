@@ -1,6 +1,5 @@
 //! tcrdist-style cluster discovery: joint alpha/beta distance graph, clustered per threshold.
 
-use indicatif::ProgressIterator;
 mod clustering;
 mod distance;
 mod lookup_cdr_seqs;
@@ -15,7 +14,7 @@ use crate::tcr_cluster::pipeline::ClusterFinder;
 use crate::tcr_cluster::stats;
 use anyhow::{Context, Result, bail};
 pub use clustering::PairedCluster;
-use clustering::build_clusters_for_threshold;
+use clustering::{build_clusters_for_threshold, build_exact_beta_clusters};
 use distance::TcrDistanceMatrix;
 use rayon::prelude::*;
 use std::borrow::Cow;
@@ -229,7 +228,7 @@ impl ClusterFinder for TcrDist {
             ProgressSettings::Position,
             Progress::Progress,
         )?;
-        let discovered: HashSet<PairedCluster> = THRESHOLDS
+        let mut discovered: HashSet<PairedCluster> = THRESHOLDS
             .into_iter()
             .map(|threshold| {
                 opb.set_message(format!("Clustering with max distance {threshold}"));
@@ -238,14 +237,18 @@ impl ClusterFinder for TcrDist {
                 ipb.reset();
                 ipb.set_length(0);
                 ipb.set_message("Building graph");
-                if distance_matrix.max() >= threshold {
+                // `to_igraph` links pairs at distance <= the scaled threshold, so if even the
+                // largest distance is within it, every record lands in one component.
+                let scaled = params.scaled_threshold(threshold);
+                if distance_matrix.max() <= scaled {
                     eprintln!("Skipping threshold {threshold} because the resulting graph would contain 1 cluster");
+                    opb.inc(1);
                     return Ok(Vec::new());
                 }
                 let graph = distance_matrix
-                    .to_igraph(params.scaled_threshold(threshold))
+                    .to_igraph(scaled)
                     .context("Failed to convert distance matrix to graph")?;
-                build_clusters_for_threshold(
+                let res = build_clusters_for_threshold(
                     threshold,
                     &graph,
                     records,
@@ -256,16 +259,58 @@ impl ClusterFinder for TcrDist {
                     max_members,
                     &ipb,
                 )
-                .context("Failed to build clusters for threshold")
+                    .context("Failed to build clusters for threshold");
+                opb.inc(1);
+                res
             })
-            .progress_with(opb.clone())
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .flatten()
             .collect();
 
         ipb.finish_and_clear();
-        opb.finish();
+        opb.finish_and_clear();
+        // Identical-sequence clusters, plus a single for every record not clustered above.
+        let covered: HashSet<usize> = discovered
+            .iter()
+            .flat_map(|c| c.member_indices.iter().copied())
+            .collect();
+        let mut ref_counts: HashMap<&str, usize> = HashMap::new();
+        for seq in &ref_seqs {
+            *ref_counts.entry(seq.as_str()).or_default() += 1;
+        }
+        let exact_fisher = |beta: &str, observed: usize| -> f64 {
+            stats::ContingencyTable2x2::from_reported_counts(
+                observed,
+                beta_seqs.len(),
+                ref_counts.get(beta).copied().unwrap_or(0),
+                ref_seqs.len(),
+            )
+            .map_or(1.0, |t| log_fact_table.fishers_exact(&t).0)
+        };
+        let exact_clusters = build_exact_beta_clusters(
+            records,
+            &self.sub_matrix,
+            true,
+            params.mode.uses_alpha(),
+            &covered,
+            &exact_fisher,
+        );
+        eprintln!(
+            "Added {} single clusters of identical {} sequences",
+            exact_clusters.len(),
+            if params.mode.uses_alpha() {
+                "CDR3α/CDR3β"
+            } else {
+                "CDR3β"
+            }
+        );
+        discovered.extend(exact_clusters);
+        eprintln!(
+            "Found {} clusters in {}",
+            discovered.len(),
+            indicatif::HumanDuration(opb.elapsed())
+        );
 
         // HashSet order changes per process; the pipeline numbers clusters (and breaks output
         // ties) by position, so return them in a fixed order.

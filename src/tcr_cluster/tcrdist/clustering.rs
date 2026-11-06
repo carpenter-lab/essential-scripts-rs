@@ -355,6 +355,10 @@ impl HasCluster for PairedCluster {
     fn cluster(&self) -> &Cluster {
         &self.cluster
     }
+
+    fn member_indices(&self) -> Option<&[usize]> {
+        Some(&self.member_indices)
+    }
 }
 
 pub fn build_clusters_for_threshold(
@@ -412,8 +416,9 @@ pub fn build_clusters_for_threshold(
                 .into_iter()
                 .collect();
 
-            // Skip clusters that do not have enough sequences to form motifs
-            if unique_alphas.len() < 2 && unique_betas.len() < 2 {
+            // Components with a single CDR3β are covered by `build_exact_beta_clusters`,
+            // which groups every record sharing that CDR3β regardless of the graph.
+            if unique_betas.len() < 2 {
                 pb.inc(1);
                 return None;
             }
@@ -424,27 +429,9 @@ pub fn build_clusters_for_threshold(
                 None
             };
 
-            let (beta_motif, kind) = match unique_betas.len() {
-                0 | 2 => (None, *cluster_kind),
-                1 => {
-                    let seq = unique_betas[0].clone();
-                    (
-                        Some(BlosumMotif::new(
-                            seq.clone(),
-                            seq,
-                            0,
-                            BTreeMap::new(),
-                            Vec::new(),
-                            &unique_betas,
-                        )),
-                        ClusterKind::Single,
-                    )
-                }
-                _ => (
-                    select_longest_representative_motif(&unique_betas, sub_matrix, trim_flanks),
-                    *cluster_kind,
-                ),
-            };
+            let beta_motif =
+                select_longest_representative_motif(&unique_betas, sub_matrix, trim_flanks);
+            let kind = *cluster_kind;
 
             let (pattern, fisher_score) = match beta_motif.clone() {
                 Some(motif) => {
@@ -477,6 +464,74 @@ pub fn build_clusters_for_threshold(
     Ok(discovered)
 }
 
+/// [`ClusterKind::Single`] clusters of identical CDR3β (or CDR3α + CDR3β when `use_alpha`)
+/// sequences, independent of the distance graph so V-gene differences do not split them.
+/// Every sequence shared by two or more records gets one, plus each remaining record whose
+/// index is not in `covered` (the records already in another cluster).
+/// `fisher_for` receives the CDR3β and the number of records carrying it.
+pub fn build_exact_beta_clusters(
+    records: &[ChainRecord],
+    sub_matrix: &AminoAcidSubMatrix,
+    trim_flanks: bool,
+    use_alpha: bool,
+    covered: &HashSet<usize>,
+    fisher_for: &(dyn Fn(&str, usize) -> f64 + Sync),
+) -> Vec<PairedCluster> {
+    let mut groups: BTreeMap<(&str, Option<&str>), Vec<usize>> = BTreeMap::new();
+    for (idx, record) in records.iter().enumerate() {
+        let alpha = record.alpha.as_deref().filter(|_| use_alpha);
+        groups
+            .entry((record.beta.as_str(), alpha))
+            .or_default()
+            .push(idx);
+    }
+
+    groups
+        .into_iter()
+        // Shared sequences always form a cluster; a sequence seen once only does when no other
+        // cluster contains it, so every record appears in the output at least once.
+        .filter(|(_, members)| members.len() >= 2 || !covered.contains(&members[0]))
+        .enumerate()
+        .map(|(cluster_id, ((beta, _), member_indices))| {
+            let unique_alphas: Vec<String> = member_indices
+                .iter()
+                .filter_map(|&idx| records[idx].alpha.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let alpha_motif = if unique_alphas.len() >= 2 {
+                select_longest_representative_motif(&unique_alphas, sub_matrix, trim_flanks)
+            } else {
+                None
+            };
+
+            let members = vec![beta.to_string(); member_indices.len()];
+            let beta_motif = BlosumMotif::new(
+                beta.to_string(),
+                beta.to_string(),
+                0,
+                BTreeMap::from([(beta.to_string(), member_indices.len())]),
+                (0..member_indices.len()).collect(),
+                &members,
+            );
+            let cluster = Cluster::new(
+                beta.to_string(),
+                ClusterKind::Single,
+                fisher_for(beta, member_indices.len()),
+                vec![beta.to_string()],
+            );
+            PairedCluster {
+                threshold: 0,
+                cluster_id: cluster_id as u32,
+                member_indices,
+                alpha_motif,
+                beta_motif: Some(beta_motif),
+                cluster,
+            }
+        })
+        .collect()
+}
+
 fn cluster(graph: &Graph) -> anyhow::Result<Vec<u32>> {
     connected_components(graph)
         .context("Failed to compute connected components in the graph")
@@ -486,6 +541,60 @@ fn cluster(graph: &Graph) -> anyhow::Result<Vec<u32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rec(beta: &str, alpha: Option<&str>) -> ChainRecord {
+        ChainRecord {
+            beta: beta.to_owned(),
+            alpha: alpha.map(str::to_owned),
+            ..ChainRecord::default()
+        }
+    }
+
+    #[test]
+    fn exact_beta_clusters_group_identical_cdr3b() {
+        let records = [
+            rec("CASSIRSSYEQYF", Some("CAVRDSNYQLIW")),
+            rec("CASSLGGYGYTF", None),
+            rec("CASSIRSSYEQYF", Some("CAVKKTTGGNKLTF")),
+            rec("CASSIRSSYEQYF", Some("CAVRDSNYQLIW")),
+            rec("CASRLGGYGETF", None),
+        ];
+        // Records 1 and 4 (seen once) are already in another cluster.
+        let covered = HashSet::from([1, 4]);
+        let exact = |use_alpha| {
+            build_exact_beta_clusters(
+                &records,
+                &AminoAcidSubMatrix::Blosum62,
+                true,
+                use_alpha,
+                &covered,
+                &|_, _| 0.5,
+            )
+        };
+        let paired = exact(true);
+        let members: Vec<&[usize]> = paired.iter().map(|c| c.member_indices.as_slice()).collect();
+        assert_eq!(
+            members,
+            [&[2][..], &[0, 3][..]],
+            "differing CDR3α splits the group; the uncovered leftover is its own single"
+        );
+
+        let clusters = exact(false);
+        assert_eq!(
+            clusters.len(),
+            1,
+            "covered seen-once records get no extra single"
+        );
+        let c = &clusters[0];
+        assert_eq!(c.member_indices, vec![0, 2, 3]);
+        assert_eq!(c.cluster.kind, ClusterKind::Single);
+        assert_eq!(c.cluster.pattern, "CASSIRSSYEQYF");
+        assert_eq!(
+            c.cluster.member_sequences,
+            vec!["CASSIRSSYEQYF".to_string()]
+        );
+        assert_eq!(c.beta_motif.as_ref().unwrap().support_count, 3);
+    }
 
     #[test]
     fn picks_longest_representative_motif() {

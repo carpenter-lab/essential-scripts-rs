@@ -85,7 +85,26 @@ impl<'a> ClusterMembers<'a> {
             .iter()
             .filter(|record| member_set.contains(&record.beta.as_str()))
             .collect();
+        Self::from_records(cluster_records, cluster, member_set)
+    }
 
+    /// Members are exactly `records[i]` for each of `indices` (e.g. one graph component),
+    /// rather than every record whose CDR3β is in the cluster.
+    pub fn from_indices(
+        records: &'a [ChainRecord],
+        cluster: &'a Cluster,
+        indices: &[usize],
+    ) -> Self {
+        let cluster_records: Vec<&ChainRecord> = indices.iter().map(|&i| &records[i]).collect();
+        let member_set: HashSet<&str> = cluster_records.iter().map(|r| r.beta.as_str()).collect();
+        Self::from_records(cluster_records, cluster, member_set)
+    }
+
+    fn from_records(
+        cluster_records: Vec<&'a ChainRecord>,
+        cluster: &'a Cluster,
+        member_set: HashSet<&'a str>,
+    ) -> Self {
         let cluster_subjects: HashSet<&'a str> = cluster_records
             .iter()
             .map(|record| record.subject.as_str())
@@ -107,6 +126,19 @@ impl<'a> ClusterMembers<'a> {
 /// Anything that wraps a shared [`Cluster`] (plain GLIPH clusters or tcrdist paired clusters).
 pub trait HasCluster {
     fn cluster(&self) -> &Cluster;
+
+    /// Indices of the exact member records, when membership is not simply "every record
+    /// whose CDR3β is in `cluster().member_sequences`".
+    fn member_indices(&self) -> Option<&[usize]> {
+        None
+    }
+
+    fn members<'a>(&'a self, records: &'a [ChainRecord]) -> ClusterMembers<'a> {
+        match self.member_indices() {
+            Some(indices) => ClusterMembers::from_indices(records, self.cluster(), indices),
+            None => ClusterMembers::new(records, self.cluster()),
+        }
+    }
 }
 
 impl HasCluster for Cluster {

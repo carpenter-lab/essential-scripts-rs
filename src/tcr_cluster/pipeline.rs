@@ -51,7 +51,7 @@ where
         .enumerate()
         .filter_map(|(index, cluster)| {
             let result = {
-                let members = ClusterMembers::new(records, cluster.cluster());
+                let members = cluster.members(records);
                 if members.is_empty() {
                     None
                 } else {
