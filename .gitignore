@@ -1,2 +1,5 @@
 /target
 /docs
+*.txt
+*.tsv
+.DS_Store
