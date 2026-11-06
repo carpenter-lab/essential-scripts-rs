@@ -8,7 +8,7 @@ mod lookup_cdr_seqs;
 pub use lookup_cdr_seqs::TcrDistDb;
 use lookup_cdr_seqs::{ChainCdrs, VGeneCdrs, infer_record_cdrs};
 
-use crate::progress::{Progress, dual_progress_bars};
+use crate::progress::{Progress, ProgressSettings, dual_progress_bars};
 use crate::tcr_cluster::blosum::AminoAcidSubMatrix;
 use crate::tcr_cluster::model::*;
 use crate::tcr_cluster::pipeline::ClusterFinder;
@@ -214,10 +214,14 @@ impl ClusterFinder for TcrDist {
         };
 
         let max_members = (records.len() as f32 * MAX_CLUSTER_FRACTION) as usize;
-        //let pb = progress_bar_with_message(THRESHOLDS.len(), "Calculating clusters", true, false)?;
-        let (opb, ipb) = dual_progress_bars(THRESHOLDS.len() as u64, None, Progress::Progress)?;
-        // Redraw periodically so elapsed time keeps moving during long graph builds.
-        opb.enable_steady_tick(std::time::Duration::from_millis(250));
+
+        let (opb, ipb) = dual_progress_bars(
+            THRESHOLDS.len() as u64,
+            None,
+            ProgressSettings::Position,
+            ProgressSettings::Position,
+            Progress::Progress,
+        )?;
         let discovered: HashSet<PairedCluster> = THRESHOLDS
             .into_iter()
             .map(|threshold| {

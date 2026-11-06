@@ -7,6 +7,7 @@ use std::cmp::PartialEq;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, YesNoArg)]
 pub enum Progress {
@@ -43,9 +44,6 @@ impl SetDrawTarget<FileByteProgress> for Progress {
 }
 
 const BYTE_PROGRESS_TEMPLATE: &str = "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} {msg} ETA: {eta}";
-const OUTER_PROGRESS_TEMPLATE: &str =
-    "{msg:<40} [{bar:40.cyan/blue}] {pos}/{len} Elapsed: {elapsed_precise} ETA: {eta}";
-const INNER_PROGRESS_TEMPLATE: &str = "\x1b[37m{msg:<40}\x1b[0m [{bar:40.cyan/blue}] {pos}/{len}";
 
 pub struct FileByteProgress {
     pb: ProgressBar,
@@ -96,21 +94,25 @@ pub fn byte_and_file_progress_bar(
 pub fn dual_progress_bars(
     outer_len: u64,
     inner_len: Option<u64>,
+    outer_settings: ProgressSettings,
+    inner_settings: ProgressSettings,
     visibility: Progress,
 ) -> Result<(ProgressBar, ProgressBar)> {
-    let outer_style = ProgressStyle::with_template(OUTER_PROGRESS_TEMPLATE)?.progress_chars("=> ");
-    let inner_style = ProgressStyle::with_template(INNER_PROGRESS_TEMPLATE)?.progress_chars("=> ");
-
     let mp = MultiProgress::new();
     let outer = mp.add(ProgressBar::new(outer_len));
-    outer.set_style(outer_style);
+
+    let template = progress_template(outer_settings, false)?;
+    set_progress_style(&outer, &template)?;
+    outer.enable_steady_tick(Duration::from_secs(1));
 
     let inner = if let Some(len) = inner_len {
         mp.add(ProgressBar::new(len))
     } else {
         mp.add(ProgressBar::no_length())
     };
-    inner.set_style(inner_style);
+
+    let template = progress_template(inner_settings, true)?;
+    set_progress_style(&inner, &template)?;
     visibility.apply(&mp);
 
     Ok((outer, inner))
@@ -124,13 +126,12 @@ pub enum ProgressSettings {
     PercentSpeed,
 }
 
-pub fn progress_bar_with_message(
-    length: usize,
-    message: &str,
-    settings: ProgressSettings,
-) -> Result<ProgressBar> {
-    let progress = ProgressBar::new(length as u64);
+fn progress_template(settings: ProgressSettings, grey_msg: bool) -> Result<String> {
     let mut template = String::from_str("{msg:<40} [{bar:40.cyan/blue}]")?;
+    if grey_msg {
+        template.insert_str(9, "\x1b[0m");
+        template.insert_str(0, "\x1b[37m");
+    }
     if settings == ProgressSettings::Position || settings == ProgressSettings::PositionSpeed {
         template.push_str(" {human_pos:>7}/{human_len}");
     } else {
@@ -140,6 +141,22 @@ pub fn progress_bar_with_message(
     if settings == ProgressSettings::PositionSpeed || settings == ProgressSettings::PercentSpeed {
         template.push_str(" {rate}");
     }
+    Ok(template)
+}
+
+pub fn progress_bar_with_message(
+    length: usize,
+    message: &str,
+    settings: ProgressSettings,
+) -> Result<ProgressBar> {
+    let progress = ProgressBar::new(length as u64);
+    let template = progress_template(settings, false)?;
+    set_progress_style(&progress, &template)?;
+    progress.set_message(message.to_owned());
+    Ok(progress)
+}
+
+fn set_progress_style(progress: &ProgressBar, template: &String) -> Result<()> {
     progress.set_style(
         ProgressStyle::with_template(&template)?
             .progress_chars("=> ")
@@ -150,8 +167,7 @@ pub fn progress_bar_with_message(
                 },
             ),
     );
-    progress.set_message(message.to_owned());
-    Ok(progress)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -180,7 +196,14 @@ mod test {
     #[case::progress(Progress::Progress)]
     #[case::no_progress(Progress::NoProgress)]
     fn test_dual_progress_bars(#[case] progress: Progress) {
-        let (outer, inner) = dual_progress_bars(1000, Some(1000), progress).unwrap();
+        let (outer, inner) = dual_progress_bars(
+            1000,
+            Some(1000),
+            ProgressSettings::Position,
+            ProgressSettings::Position,
+            progress,
+        )
+        .unwrap();
         assert_eq!(outer.length(), Some(1000));
         assert_eq!(inner.length(), Some(1000));
     }
