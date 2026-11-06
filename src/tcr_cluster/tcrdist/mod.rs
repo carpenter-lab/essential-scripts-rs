@@ -2,6 +2,7 @@
 
 mod clustering;
 mod distance;
+mod linkage;
 mod lookup_cdr_seqs;
 
 pub use lookup_cdr_seqs::TcrDistDb;
@@ -14,7 +15,7 @@ use crate::tcr_cluster::pipeline::ClusterFinder;
 use crate::tcr_cluster::stats;
 use anyhow::{Context, Result, bail};
 pub use clustering::PairedCluster;
-use clustering::{build_clusters_for_threshold, build_exact_beta_clusters};
+use clustering::{build_clusters_for_threshold, build_exact_beta_clusters, graph_components};
 use distance::TcrDistanceMatrix;
 use rayon::prelude::*;
 use std::borrow::Cow;
@@ -33,6 +34,8 @@ pub struct TcrDist {
     pub infer_mode: bool,
     /// tcrdist3 gene db; required by the modes that use germline CDRs.
     pub gene_db: Option<TcrDistDb>,
+    /// How records within each threshold are grouped into clusters.
+    pub cluster_method: ClusterMethod,
 }
 
 impl TcrDist {
@@ -165,13 +168,16 @@ impl ClusterFinder for TcrDist {
             .cloned()
             .collect();
 
-        eprintln!("tcrdist distance mode: {mode}");
+        eprintln!(
+            "Running tcrdist on {mode} using {} clustering",
+            self.cluster_method
+        );
         if missing_alpha > 0 {
             eprintln!("Warning: {missing_alpha} records without a CDR3α will be ignored");
         }
         if unknown_v > 0 {
             eprintln!(
-                "Warning: {unknown_v} records with a missing or unknown V gene for {} will be ignored",
+                "Warning: {unknown_v} records with a missing or unknown {} V gene will be ignored",
                 db.map_or_else(String::new, |db| db.organism().to_string())
             );
         }
@@ -228,29 +234,42 @@ impl ClusterFinder for TcrDist {
             ProgressSettings::Position,
             Progress::Progress,
         )?;
+        let cutoffs: Vec<u8> = THRESHOLDS
+            .iter()
+            .map(|&t| params.scaled_threshold(t))
+            .collect();
+        // Single linkage finds every threshold's components in one pass up front; graph
+        // methods build a graph per threshold instead.
+        let mut linkage = (!self.cluster_method.needs_graph()).then(|| {
+            opb.set_message("Linking records within each threshold");
+            linkage::single_linkage_memberships(&distance_matrix, &cutoffs)
+        });
         let mut discovered: HashSet<PairedCluster> = THRESHOLDS
             .into_iter()
-            .map(|threshold| {
+            .zip(cutoffs)
+            .enumerate()
+            .map(|(level, (threshold, cutoff))| {
                 opb.set_message(format!("Clustering with max distance {threshold}"));
                 // Show that the inner bar is idle while the graph is built, instead of
                 // leaving the previous threshold's count on screen.
                 ipb.reset();
                 ipb.set_length(0);
-                ipb.set_message("Building graph");
-                // `to_igraph` links pairs at distance <= the scaled threshold, so if even the
-                // largest distance is within it, every record lands in one component.
-                let scaled = params.scaled_threshold(threshold);
-                if distance_matrix.max() <= scaled {
-                    eprintln!("Skipping threshold {threshold} because the resulting graph would contain 1 cluster");
-                    opb.inc(1);
-                    return Ok(Vec::new());
-                }
-                let graph = distance_matrix
-                    .to_igraph(scaled)
-                    .context("Failed to convert distance matrix to graph")?;
+                let memberships = match self.cluster_method {
+                    ClusterMethod::SingleLinkage => linkage
+                        .as_mut()
+                        .map(|levels| std::mem::take(&mut levels[level]))
+                        .expect("single linkage is computed up front"),
+                    ClusterMethod::GraphComponents => {
+                        ipb.set_message("Building graph");
+                        let graph = distance_matrix
+                            .to_igraph(cutoff)
+                            .context("Failed to convert distance matrix to graph")?;
+                        graph_components(&graph).context("Failed to cluster graph")?
+                    }
+                };
                 let res = build_clusters_for_threshold(
                     threshold,
-                    &graph,
+                    &memberships,
                     records,
                     &self.sub_matrix,
                     true,
@@ -259,7 +278,7 @@ impl ClusterFinder for TcrDist {
                     max_members,
                     &ipb,
                 )
-                    .context("Failed to build clusters for threshold");
+                .context("Failed to build clusters for threshold");
                 opb.inc(1);
                 res
             })
@@ -361,6 +380,7 @@ TRAV1-2*01\thuman\tA\tV\tg\t+1\tX\t-\tTSG.FNG;VVL;DGL;CAVR
             params: DistanceParams::new(mode),
             infer_mode: false,
             gene_db: Some(TcrDistDb::from_tsv(DB, Organism::Human).unwrap()),
+            cluster_method: ClusterMethod::default(),
         }
     }
 

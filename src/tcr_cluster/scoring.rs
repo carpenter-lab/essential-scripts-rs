@@ -350,7 +350,7 @@ mod tests {
             member_sequences: vec!["CASSAAF".to_owned()],
         };
         let ctx = HlaContext::build(&records, 0.05);
-        let cluster_record = ClusterMembers::new(&records, &cluster);
+        let cluster_record = ClusterMembers::from_indices(&records, &cluster, &[0, 1, 2]);
 
         let (score, hits) = hla_score(&cluster_record, &ctx);
 

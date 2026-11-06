@@ -83,6 +83,35 @@ impl std::fmt::Display for DistanceMode {
     }
 }
 
+/// How the tcrdist distances are split into clusters at each threshold.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum ClusterMethod {
+    /// Connected components (single linkage) found with a union-find straight from the
+    /// distance matrix. One pass covers every threshold and no graph is built.
+    #[default]
+    SingleLinkage,
+    /// Connected components of an igraph graph built for each threshold. Same clusters as
+    /// `single-linkage` but slower and memory-hungry at large thresholds; the entry point
+    /// for graph-based methods (e.g. Leiden, Louvain).
+    GraphComponents,
+}
+
+impl ClusterMethod {
+    /// Whether the method needs an igraph graph per threshold.
+    pub fn needs_graph(self) -> bool {
+        !matches!(self, Self::SingleLinkage)
+    }
+}
+
+impl std::fmt::Display for ClusterMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::SingleLinkage => "single linkage",
+            Self::GraphComponents => "graph connected components",
+        })
+    }
+}
+
 /// Parameters of the tcrdist joint distance:
 /// `cdr3_weight · Σ CDR3 + germline_weight · Σ (CDR1 + CDR2 + CDR2.5)` over the chains in `mode`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

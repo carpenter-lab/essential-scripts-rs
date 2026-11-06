@@ -356,14 +356,14 @@ impl HasCluster for PairedCluster {
         &self.cluster
     }
 
-    fn member_indices(&self) -> Option<&[usize]> {
-        Some(&self.member_indices)
+    fn member_indices(&self) -> &[usize] {
+        &self.member_indices
     }
 }
 
 pub fn build_clusters_for_threshold(
     threshold: u8,
-    graph: &Graph,
+    memberships: &[u32],
     records: &[ChainRecord],
     sub_matrix: &AminoAcidSubMatrix,
     trim_flanks: bool,
@@ -372,8 +372,6 @@ pub fn build_clusters_for_threshold(
     max_members: usize,
     pb: &ProgressBar,
 ) -> anyhow::Result<Vec<PairedCluster>> {
-    let memberships = cluster(graph).context("Failed to cluster graph")?;
-
     // Group record indices by their cluster component ID
     let mut groups: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     for (record_idx, &cluster_id) in memberships.iter().enumerate() {
@@ -532,7 +530,8 @@ pub fn build_exact_beta_clusters(
         .collect()
 }
 
-fn cluster(graph: &Graph) -> anyhow::Result<Vec<u32>> {
+/// Component label of every vertex of `graph`.
+pub fn graph_components(graph: &Graph) -> anyhow::Result<Vec<u32>> {
     connected_components(graph)
         .context("Failed to compute connected components in the graph")
         .map(|cc| cc.membership)

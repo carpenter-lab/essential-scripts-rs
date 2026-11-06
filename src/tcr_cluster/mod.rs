@@ -67,6 +67,7 @@ pub fn handle_command(command: Commands) -> Result<()> {
                 params: DistanceParams::new(mode.unwrap_or(DistanceMode::Beta)),
                 infer_mode: mode.is_none(),
                 gene_db,
+                cluster_method: tcrdist.cluster_method,
             };
             run_command(&finder, &args).context("tcrdist analysis failed")
         }

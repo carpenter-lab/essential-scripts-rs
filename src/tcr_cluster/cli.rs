@@ -1,6 +1,6 @@
 use crate::cores::{thread_default, thread_parser};
 use crate::tcr_cluster::blosum::AminoAcidSubMatrix;
-use crate::tcr_cluster::model::{Algorithm, DistanceMode, Organism, References};
+use crate::tcr_cluster::model::{Algorithm, ClusterMethod, DistanceMode, Organism, References};
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
@@ -117,6 +117,14 @@ pub struct TcrDistArgs {
         help = "Organism of the germline V genes for the *-full distance modes"
     )]
     pub organism: Organism,
+
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = Default::default(),
+        help = "How records within each distance threshold are grouped into clusters"
+    )]
+    pub cluster_method: ClusterMethod,
 }
 
 impl CommonArgs {

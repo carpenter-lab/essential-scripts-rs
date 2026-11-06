@@ -31,8 +31,51 @@ pub struct Gliph {
     pub sub_matrix: Option<AminoAcidSubMatrix>,
 }
 
+/// A GLIPH cluster with the records it covers: every record whose CDR3β is a member.
+pub struct GliphCluster {
+    pub cluster: Cluster,
+    pub member_indices: Vec<usize>,
+}
+
+impl HasCluster for GliphCluster {
+    fn cluster(&self) -> &Cluster {
+        &self.cluster
+    }
+
+    fn member_indices(&self) -> &[usize] {
+        &self.member_indices
+    }
+}
+
+/// Attaches to each cluster the (ascending) indices of the records carrying one of its
+/// CDR3βs, so scoring looks members up directly instead of scanning every record.
+fn with_member_indices(clusters: Vec<Cluster>, records: &[ChainRecord]) -> Vec<GliphCluster> {
+    let mut by_beta: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (index, record) in records.iter().enumerate() {
+        by_beta.entry(record.beta.as_str()).or_default().push(index);
+    }
+    clusters
+        .into_par_iter()
+        .map(|cluster| {
+            let mut member_indices: Vec<usize> = cluster
+                .member_sequences
+                .iter()
+                .filter_map(|beta| by_beta.get(beta.as_str()))
+                .flatten()
+                .copied()
+                .collect();
+            member_indices.sort_unstable();
+            member_indices.dedup();
+            GliphCluster {
+                cluster,
+                member_indices,
+            }
+        })
+        .collect()
+}
+
 impl ClusterFinder for Gliph {
-    type Cluster = Cluster;
+    type Cluster = GliphCluster;
 
     fn prepare<'a>(&self, records: &'a [ChainRecord]) -> Result<Cow<'a, [ChainRecord]>> {
         let valid: Vec<ChainRecord> = records
@@ -46,7 +89,11 @@ impl ClusterFinder for Gliph {
         Ok(Cow::Owned(valid))
     }
 
-    fn find(&self, records: &[ChainRecord], reference: &ReferenceData) -> Result<Vec<Cluster>> {
+    fn find(
+        &self,
+        records: &[ChainRecord],
+        reference: &ReferenceData,
+    ) -> Result<Vec<GliphCluster>> {
         let filter = GlobalFilterConfig::new(0.05, 2, 0.1);
         let sample_sequences: Vec<String> = records
             .iter()
@@ -99,7 +146,7 @@ impl ClusterFinder for Gliph {
                 .then_with(|| left.pattern.cmp(&right.pattern))
                 .then_with(|| left.kind.cmp(&right.kind))
         });
-        Ok(clusters)
+        Ok(with_member_indices(clusters, records))
     }
 }
 

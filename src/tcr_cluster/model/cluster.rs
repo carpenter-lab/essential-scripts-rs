@@ -75,21 +75,7 @@ pub struct ClusterMembers<'a> {
 }
 
 impl<'a> ClusterMembers<'a> {
-    pub fn new(records: &'a [ChainRecord], cluster: &'a Cluster) -> Self {
-        let member_set: HashSet<&str> = cluster
-            .member_sequences
-            .iter()
-            .map(|s| s.as_str())
-            .collect();
-        let cluster_records: Vec<&ChainRecord> = records
-            .iter()
-            .filter(|record| member_set.contains(&record.beta.as_str()))
-            .collect();
-        Self::from_records(cluster_records, cluster, member_set)
-    }
-
-    /// Members are exactly `records[i]` for each of `indices` (e.g. one graph component),
-    /// rather than every record whose CDR3β is in the cluster.
+    /// Members are exactly `records[i]` for each of `indices`.
     pub fn from_indices(
         records: &'a [ChainRecord],
         cluster: &'a Cluster,
@@ -123,27 +109,16 @@ impl<'a> ClusterMembers<'a> {
     }
 }
 
-/// Anything that wraps a shared [`Cluster`] (plain GLIPH clusters or tcrdist paired clusters).
+/// Anything that wraps a shared [`Cluster`] together with its member records
+/// (GLIPH clusters or tcrdist paired clusters).
 pub trait HasCluster {
     fn cluster(&self) -> &Cluster;
 
-    /// Indices of the exact member records, when membership is not simply "every record
-    /// whose CDR3β is in `cluster().member_sequences`".
-    fn member_indices(&self) -> Option<&[usize]> {
-        None
-    }
+    /// Indices of the member records, in ascending order.
+    fn member_indices(&self) -> &[usize];
 
     fn members<'a>(&'a self, records: &'a [ChainRecord]) -> ClusterMembers<'a> {
-        match self.member_indices() {
-            Some(indices) => ClusterMembers::from_indices(records, self.cluster(), indices),
-            None => ClusterMembers::new(records, self.cluster()),
-        }
-    }
-}
-
-impl HasCluster for Cluster {
-    fn cluster(&self) -> &Cluster {
-        self
+        ClusterMembers::from_indices(records, self.cluster(), self.member_indices())
     }
 }
 

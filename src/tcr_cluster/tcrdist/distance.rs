@@ -81,8 +81,10 @@ impl TcrDistanceMatrix {
 
         Ok(graph)
     }
-    pub fn max(&self) -> u8 {
-        self.distances.iter().max().copied().unwrap_or(0)
+    /// The flattened lower triangle: row `i` (for `i >= 1`) holds the distances to records
+    /// `0..i` and starts at offset `i * (i - 1) / 2`.
+    pub(crate) fn lower_triangle(&self) -> &[u8] {
+        &self.distances
     }
 }
 
