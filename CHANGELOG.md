@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/carpenter-lab/essential-scripts-rs/compare/v1.2.0...v1.2.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **deps:** update zip to 9.0.5 ([#65](https://github.com/carpenter-lab/essential-scripts-rs/issues/65)) ([538bd55](https://github.com/carpenter-lab/essential-scripts-rs/commit/538bd554e1c4c6aff289f6f25530e9db22f6d876))
+
 ## [1.2.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v1.1.0...v1.2.0) (2026-10-13)
 
 
