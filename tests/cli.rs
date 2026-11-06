@@ -24,18 +24,29 @@ fn base_command_works(#[case] arg: &str) {
 #[case::score_tcr_alignments("score-tcr-alignments")]
 #[case::geo_fastq("geo-fastq")]
 #[case::run_enrichr("run-enrichr")]
+#[case::run_gliph("run-gliph")]
+#[case::tcr_match("tcr-match")]
 fn command_cases(#[case] arg: &str) {}
 
 #[apply(command_cases)]
 fn subcommand_help_works(#[case] arg: &str) {
-    cargo_bin_cmd!("essential-scripts-rs")
+    let output = cargo_bin_cmd!("essential-scripts-rs")
         .args([arg, "--help"])
         .assert()
-        .success();
+        .success()
+        .get_output()
+        .stdout
+        .clone();
     cargo_bin_cmd!("essential-scripts-rs")
         .args(["help", arg])
         .assert()
         .success();
+    if arg == "run-gliph" {
+        assert!(
+            String::from_utf8_lossy(&output).contains("--hla-file"),
+            "run-gliph help should document optional HLA input"
+        );
+    }
 }
 
 #[apply(command_cases)]
@@ -100,6 +111,34 @@ fn split_sample_id_cli_runs() {
         .success();
 
     assert!(output.is_file());
+}
+
+#[test]
+fn tcr_match_cli_runs() {
+    let tmp = tempdir().unwrap();
+    let input_path = tmp.path().join("input.txt");
+
+    fs::write(&input_path, "CASSLGF\n").unwrap();
+
+    let output = cargo_bin_cmd!("essential-scripts-rs")
+        .args([
+            "tcr-match",
+            input_path.to_str().unwrap(),
+            "-d",
+            "iedb",
+            "-s",
+            "0.9",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+    assert!(stdout.contains(
+        "trimmed_input_sequence\tmatch_sequence\tscore\treceptor_group\tepitope\tantigen\torganism"
+    ));
 }
 
 #[test]

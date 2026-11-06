@@ -54,7 +54,6 @@ pub enum Commands {
     /// Scans through a directory searching for Cell Ranger Pipestances (subdirectories containing a `*.mri.tgz` marker file).
     /// For each pipestance, copies selected outputs (H5, MEX, VDJ) into a destination directory.
     /// Those files are renamed from their default (`sample_filtered_feature_bc_matrix.h5`) to `<sample>.h5` and stored as a flat directory.
-    #[command(about, long_about)]
     CopyCellRangerOuts {
         #[arg(
             short,
