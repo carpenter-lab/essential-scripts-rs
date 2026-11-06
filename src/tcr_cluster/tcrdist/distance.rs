@@ -81,6 +81,9 @@ impl TcrDistanceMatrix {
 
         Ok(graph)
     }
+    pub fn max(&self) -> u8 {
+        self.distances.iter().max().copied().unwrap_or(0)
+    }
 }
 
 /// `lhs[i] = lhs[i].saturating_add(rhs[i])`; compiles to `uqadd` (NEON) / `paddusb` (x86).

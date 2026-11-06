@@ -22,7 +22,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
-const THRESHOLDS: [u8; 6] = [5, 10, 30, 50, 80, 100];
+const THRESHOLDS: [u8; 6] = [4, 8, 12, 18, 24, 30];
 /// Clusters containing at least this fraction of all records are considered uninformative.
 const MAX_CLUSTER_FRACTION: f32 = 0.25;
 
@@ -44,8 +44,14 @@ impl TcrDist {
         } else {
             self.params.mode
         };
+        let cdr3_weight = if mode.uses_germline_cdrs() {
+            self.params.cdr3_weight
+        } else {
+            1
+        };
         DistanceParams {
             mode,
+            cdr3_weight,
             ..self.params
         }
     }
@@ -187,6 +193,7 @@ impl ClusterFinder for TcrDist {
     ) -> Result<Vec<PairedCluster>> {
         let ref_seqs = reference.valid_sequences();
         let params = self.params_for(records);
+        params.check_thresholds(&THRESHOLDS);
         let distance_matrix = joint_distance_matrix(
             records,
             &params,
@@ -231,8 +238,12 @@ impl ClusterFinder for TcrDist {
                 ipb.reset();
                 ipb.set_length(0);
                 ipb.set_message("Building graph");
+                if distance_matrix.max() >= threshold {
+                    eprintln!("Skipping threshold {threshold} because the resulting graph would contain 1 cluster");
+                    return Ok(Vec::new());
+                }
                 let graph = distance_matrix
-                    .to_igraph(threshold)
+                    .to_igraph(params.scaled_threshold(threshold))
                     .context("Failed to convert distance matrix to graph")?;
                 build_clusters_for_threshold(
                     threshold,

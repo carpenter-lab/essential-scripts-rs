@@ -88,7 +88,7 @@ impl std::fmt::Display for DistanceMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DistanceParams {
     pub mode: DistanceMode,
-    /// tcrdist3 uses 3; 1 keeps the distances on the scale of the clustering thresholds.
+    /// tcrdist3 uses 3 for CDR3 and 1 for germline CDRs, so that the CDR3 dominates the distance.
     pub cdr3_weight: u8,
     pub germline_weight: u8,
     /// Penalty for a gap (CDR3 alignment gap, or residue vs IMGT gap in germline CDRs).
@@ -101,10 +101,34 @@ impl DistanceParams {
     pub fn new(mode: DistanceMode) -> Self {
         Self {
             mode,
-            cdr3_weight: 1,
+            cdr3_weight: 3,
             germline_weight: 1,
             gap_penalty: 4,
             max_mismatch: 4,
         }
+    }
+    /// Returns the number of chains in the distance mode.
+    fn chains(&self) -> u8 {
+        if self.mode.uses_alpha() { 2 } else { 1 }
+    }
+    /// `threshold` in CDR3-equivalent units, moved onto the weighted distance scale.
+    /// Capped at 254 (255 = saturated "too far").
+    pub fn scaled_threshold(&self, threshold: u8) -> u8 {
+        threshold
+            .saturating_mul(self.cdr3_weight)
+            .saturating_mul(self.chains())
+            .min(u8::MAX - 1)
+    }
+
+    pub fn check_thresholds(&self, thresholds: &[u8]) {
+        assert!(
+            thresholds.iter().all(|&t| {
+                t.checked_mul(self.cdr3_weight)
+                    .and_then(|x| x.checked_mul(self.chains()))
+                    .is_some_and(|x| x < 255)
+            }),
+            "Thresholds must be small enough that the scaled threshold does not saturate at 255. \
+            Consider using a smaller threshold or reducing the cdr3_weight."
+        );
     }
 }
