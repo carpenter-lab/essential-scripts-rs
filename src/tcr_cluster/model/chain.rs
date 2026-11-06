@@ -111,6 +111,10 @@ mod tests {
         assert_eq!(record.ja_allele().as_deref(), Some("TRAJ33*01"));
         assert_eq!(record.va_allele(), None);
         assert!(record.has_alpha_genes());
-        assert_eq!(record.v_gene.as_deref(), Some("TRBV9"), "input is not rewritten");
+        assert_eq!(
+            record.v_gene.as_deref(),
+            Some("TRBV9"),
+            "input is not rewritten"
+        );
     }
 }

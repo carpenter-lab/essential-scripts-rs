@@ -12,9 +12,12 @@ fn write_rows<W: Write>(writer: W, rows: &[OutputRow]) -> Result<()> {
     // VA/JA columns only appear when the input supplied alpha genes, so beta-only
     // runs keep the original GLIPH column layout.
     let include_alpha_genes = rows.iter().any(OutputRow::has_alpha_genes);
-    let header = OUTPUT_COLUMNS
-        .iter()
-        .chain(include_alpha_genes.then_some(&ALPHA_GENE_COLUMNS).into_iter().flatten());
+    let header = OUTPUT_COLUMNS.iter().chain(
+        include_alpha_genes
+            .then_some(&ALPHA_GENE_COLUMNS)
+            .into_iter()
+            .flatten(),
+    );
     writer
         .write_record(header)
         .context("Failed to write GLIPH TSV header")?;
@@ -146,13 +149,23 @@ mod tests {
 
         let text = fs::read_to_string(path).unwrap();
         let lines: Vec<Vec<&str>> = text.lines().map(|l| l.split('\t').collect()).collect();
-        let expected_header: Vec<&str> =
-            OUTPUT_COLUMNS.iter().chain(&ALPHA_GENE_COLUMNS).copied().collect();
+        let expected_header: Vec<&str> = OUTPUT_COLUMNS
+            .iter()
+            .chain(&ALPHA_GENE_COLUMNS)
+            .copied()
+            .collect();
         assert_eq!(lines[0], expected_header);
         let n = expected_header.len();
         assert!(lines.iter().all(|l| l.len() == n));
-        assert_eq!(lines[1][n - 2..], ["TRAV12-2", "TRAJ33"], "no allele added in output");
-        assert_eq!(lines[1][OUTPUT_COLUMNS.iter().position(|c| *c == "VB").unwrap()], "TRBV9");
+        assert_eq!(
+            lines[1][n - 2..],
+            ["TRAV12-2", "TRAJ33"],
+            "no allele added in output"
+        );
+        assert_eq!(
+            lines[1][OUTPUT_COLUMNS.iter().position(|c| *c == "VB").unwrap()],
+            "TRBV9"
+        );
         assert_eq!(lines[2][n - 2..], ["", ""]);
         assert!(!text.contains("*01"));
     }
@@ -168,6 +181,9 @@ mod tests {
         write_output(&path, &[row_for(&record)]).unwrap();
         let text = fs::read_to_string(path).unwrap();
         assert_eq!(text.lines().next().unwrap(), OUTPUT_COLUMNS.join("\t"));
-        assert!(text.lines().all(|l| l.split('\t').count() == OUTPUT_COLUMNS.len()));
+        assert!(
+            text.lines()
+                .all(|l| l.split('\t').count() == OUTPUT_COLUMNS.len())
+        );
     }
 }

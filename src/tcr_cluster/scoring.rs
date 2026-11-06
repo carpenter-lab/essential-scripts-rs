@@ -94,7 +94,12 @@ pub fn expansion_score(
     // its last bits between runs.
     let mut observed_logs: Vec<f64> = member_sequences
         .iter()
-        .filter_map(|&seq| exp_ctx.repertoire_counts.get(seq).map(|count| count.ln_1p()))
+        .filter_map(|&seq| {
+            exp_ctx
+                .repertoire_counts
+                .get(seq)
+                .map(|count| count.ln_1p())
+        })
         .collect();
     observed_logs.sort_by(f64::total_cmp);
     let cluster_size = observed_logs.len();
