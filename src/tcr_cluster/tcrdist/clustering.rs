@@ -1,4 +1,4 @@
-use crate::tcr_cluster::blosum::{AminoAcidSubMatrix, blosum_nonnegative};
+use crate::tcr_cluster::blosum::{AminoAcidSubMatrix, Chain, blosum_nonnegative};
 use crate::tcr_cluster::model::{ChainRecord, Cluster, ClusterKind, HasCluster};
 use anyhow::Context;
 use indicatif::ProgressBar;
@@ -119,6 +119,7 @@ pub fn discover_blosum_motifs(
     k: usize,
     trim_flanks: bool,
     top_n: usize,
+    chain: &Chain,
 ) -> Vec<BlosumMotif> {
     if sequences.is_empty() || k == 0 {
         return Vec::new();
@@ -147,7 +148,8 @@ pub fn discover_blosum_motifs(
                 .iter()
                 .filter(|cand| {
                     let cand_aa = cand.as_bytes()[pos];
-                    cand_aa == center_aa || blosum_nonnegative(center_aa, cand_aa, sub_matrix)
+                    cand_aa == center_aa
+                        || blosum_nonnegative(center_aa, cand_aa, sub_matrix, chain)
                 })
                 .collect();
 
@@ -256,9 +258,10 @@ pub fn select_longest_representative_motif(
     sequences: &[String],
     sub_matrix: &AminoAcidSubMatrix,
     trim_flanks: bool,
+    chain: &Chain,
 ) -> Option<BlosumMotif> {
     for k in (K_MIN..=K_MAX).rev() {
-        let best = discover_blosum_motifs(sequences, sub_matrix, k, trim_flanks, 1)
+        let best = discover_blosum_motifs(sequences, sub_matrix, k, trim_flanks, 1, chain)
             .into_iter()
             .next();
         if let Some(motif) = best
@@ -422,13 +425,22 @@ pub fn build_clusters_for_threshold(
             }
 
             let alpha_motif = if unique_alphas.len() >= 2 {
-                select_longest_representative_motif(&unique_alphas, sub_matrix, trim_flanks)
+                select_longest_representative_motif(
+                    &unique_alphas,
+                    sub_matrix,
+                    trim_flanks,
+                    &Chain::Alpha,
+                )
             } else {
                 None
             };
 
-            let beta_motif =
-                select_longest_representative_motif(&unique_betas, sub_matrix, trim_flanks);
+            let beta_motif = select_longest_representative_motif(
+                &unique_betas,
+                sub_matrix,
+                trim_flanks,
+                &Chain::Beta,
+            );
             let kind = *cluster_kind;
 
             let (pattern, fisher_score) = match beta_motif.clone() {
@@ -498,7 +510,12 @@ pub fn build_exact_beta_clusters(
                 .into_iter()
                 .collect();
             let alpha_motif = if unique_alphas.len() >= 2 {
-                select_longest_representative_motif(&unique_alphas, sub_matrix, trim_flanks)
+                select_longest_representative_motif(
+                    &unique_alphas,
+                    sub_matrix,
+                    trim_flanks,
+                    &Chain::Alpha,
+                )
             } else {
                 None
             };
@@ -601,8 +618,13 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let m = select_longest_representative_motif(&seqs, &AminoAcidSubMatrix::Blosum62, false)
-            .unwrap();
+        let m = select_longest_representative_motif(
+            &seqs,
+            &AminoAcidSubMatrix::Blosum62,
+            false,
+            &Chain::Beta,
+        )
+        .unwrap();
         println!("Motif: {:?}", m);
         assert!(m.consensus.len() >= 5);
         assert!(m.support_fraction >= MIN_SUPPORT);

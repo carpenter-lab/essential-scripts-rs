@@ -66,7 +66,7 @@ const BLOSUM62: [[i8; 20]; 20] = [
     ],
 ];
 
-const TCR_BLOSUM: [[i8; 20]; 20] = [
+const TCR_BLOSUM_B: [[i8; 20]; 20] = [
     [
         0, 0, 0, 0, -5, 0, -1, 0, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0,
     ],
@@ -121,6 +121,71 @@ const TCR_BLOSUM: [[i8; 20]; 20] = [
     ],
 ];
 
+const TCR_BLOSUM_A: [[i8; 20]; 20] = [
+    [
+        2, -1, -1, -1, 0, 0, 0, 0, 0, -1, -1, -1, -1, -1, 0, 0, -1, 0, -1, 0,
+    ],
+    [
+        -1, 1, 0, 0, 1, 0, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, -1,
+    ],
+    [
+        -1, 0, 1, 0, 0, 0, 0, 0, 0, -1, -2, 1, 0, 0, 0, 0, 0, 0, 0, -2,
+    ],
+    [
+        -1, 0, 0, 1, -5, 0, 0, 0, 0, -1, -2, 0, 0, 0, 0, 0, 0, 0, 0, -1,
+    ],
+    [
+        0, 1, 0, -5, 2, -4, -4, 0, -2, -5, 0, -5, -4, -4, -4, 0, -6, -2, -5, 0,
+    ],
+    [
+        0, 0, 0, 0, -4, 2, 0, 0, 0, -1, -2, 1, 0, 0, 0, 0, 0, 0, 0, -2,
+    ],
+    [
+        0, 0, 0, 0, -4, 0, 1, 0, 1, -1, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    [
+        0, 0, 0, 0, 0, 0, 0, 1, 0, -2, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0,
+    ],
+    [0, 0, 0, 0, -2, 0, 1, 0, 2, 0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0],
+    [
+        -1, 0, -1, -1, -5, -1, -1, -2, 0, 3, 0, -1, 0, 0, 0, 0, 1, -1, 0, 0,
+    ],
+    [
+        -1, -1, -2, -2, 0, -2, 0, -1, 0, 0, 2, -4, 0, 1, 0, -1, -1, -1, 0, 0,
+    ],
+    [
+        -1, 0, 1, 0, -5, 1, -1, -1, -1, -1, -4, 3, 0, -3, 0, -2, -1, -2, -4, -3,
+    ],
+    [
+        -1, 0, 0, 0, -4, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, -1, 0,
+    ],
+    [
+        -1, 0, 0, 0, -4, 0, 0, 0, 0, 0, 1, -3, 0, 1, 0, 0, 0, 0, 0, 0,
+    ],
+    [0, 0, 0, 0, -4, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+    [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1, -2, 0, 0, 0, 1, 0, 0, 0, -1,
+    ],
+    [
+        -1, 0, 0, 0, -6, 0, 0, 0, 0, 1, -1, -1, 0, 0, 0, 0, 1, 0, 0, 0,
+    ],
+    [
+        0, 0, 0, 0, -2, 0, 0, 0, 1, -1, -1, -2, 0, 0, 0, 0, 0, 2, 0, -1,
+    ],
+    [
+        -1, 0, 0, 0, -5, 0, 0, 0, 0, 0, 0, -4, -1, 0, 0, 0, 0, 0, 1, -1,
+    ],
+    [
+        0, -1, -2, -1, 0, -2, 0, 0, 0, 0, 0, -3, 0, 0, 0, -1, 0, -1, -1, 1,
+    ],
+];
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Chain {
+    Alpha,
+    Beta,
+}
+
 #[derive(Clone, ValueEnum, Debug)]
 pub enum AminoAcidSubMatrix {
     Blosum62,
@@ -128,10 +193,11 @@ pub enum AminoAcidSubMatrix {
 }
 
 impl AminoAcidSubMatrix {
-    fn get_score(&self, left: &u8, right: &u8) -> anyhow::Result<i8> {
-        let matrix = match self {
-            AminoAcidSubMatrix::Blosum62 => BLOSUM62,
-            AminoAcidSubMatrix::Tcr => TCR_BLOSUM,
+    fn get_score(&self, left: &u8, right: &u8, chain: &Chain) -> anyhow::Result<i8> {
+        let matrix = match (self, chain) {
+            (AminoAcidSubMatrix::Blosum62, _) => BLOSUM62,
+            (AminoAcidSubMatrix::Tcr, Chain::Alpha) => TCR_BLOSUM_A,
+            (AminoAcidSubMatrix::Tcr, Chain::Beta) => TCR_BLOSUM_B,
         };
         let Some(left_index) = BLOSUM_ORDER.iter().position(|value| *value == *left) else {
             bail!("Invalid amino acid character: {}", left);
@@ -144,7 +210,7 @@ impl AminoAcidSubMatrix {
 
     /// Maps a traditional substitution matrix (like BLOSUM62) into a mismatch distance matrix
     /// as defined by the Dash et al. (tcrdist) approach.
-    pub fn build_mismatch_matrix(&self, max_value: i32) -> HashMap<(u8, u8), i32> {
+    pub fn build_mismatch_matrix(&self, max_value: i32, chain: &Chain) -> HashMap<(u8, u8), i32> {
         let mut distance_matrix: HashMap<(u8, u8), i32> =
             HashMap::with_capacity(BLOSUM_ORDER.len() * BLOSUM_ORDER.len());
 
@@ -153,7 +219,7 @@ impl AminoAcidSubMatrix {
                 if a == b {
                     distance_matrix.insert((*a, *b), 0);
                 } else {
-                    let blosum_score: i32 = self.get_score(a, b).unwrap_or(0).into();
+                    let blosum_score: i32 = self.get_score(a, b, chain).unwrap_or(0).into();
                     // tcrdist formula: min(max_val, max_val - score)
                     let dist = std::cmp::min(max_value, max_value - blosum_score);
                     distance_matrix.insert((*a, *b), dist);
@@ -164,8 +230,8 @@ impl AminoAcidSubMatrix {
     }
 }
 
-pub fn blosum_nonnegative(left: u8, right: u8, blosum: &AminoAcidSubMatrix) -> bool {
-    blosum.get_score(&left, &right).is_ok_and(|x| x >= 0)
+pub fn blosum_nonnegative(left: u8, right: u8, blosum: &AminoAcidSubMatrix, chain: &Chain) -> bool {
+    blosum.get_score(&left, &right, chain).is_ok_and(|x| x >= 0)
 }
 
 pub fn is_amino_acid_sequence(sequence: &str) -> bool {

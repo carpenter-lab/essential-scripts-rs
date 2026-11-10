@@ -1,4 +1,5 @@
 use super::*;
+use crate::tcr_cluster::blosum::Chain;
 
 pub(super) fn global_tags(sequences: &[String]) -> BTreeMap<String, Vec<TaggedMember>> {
     let mut result: BTreeMap<String, Vec<TaggedMember>> = BTreeMap::new();
@@ -115,7 +116,12 @@ pub(super) fn global_fisher_candidates(
                 for right in left + 1..sequences.len() {
                     let compatible = blosum.as_ref().is_none_or(|matrix| {
                         residues[left] == residues[right]
-                            || blosum::blosum_nonnegative(residues[left], residues[right], matrix)
+                            || blosum::blosum_nonnegative(
+                                residues[left],
+                                residues[right],
+                                matrix,
+                                &Chain::Beta,
+                            )
                     });
                     if compatible {
                         union.join(left, right);
@@ -153,7 +159,12 @@ pub(super) fn global_fisher_candidates(
                             blosum.as_ref().is_none_or(|matrix| {
                                 component_residues.iter().any(|member| {
                                     member == *residue
-                                        || blosum::blosum_nonnegative(*member, **residue, matrix)
+                                        || blosum::blosum_nonnegative(
+                                            *member,
+                                            **residue,
+                                            matrix,
+                                            &Chain::Beta,
+                                        )
                                 })
                             })
                         })
