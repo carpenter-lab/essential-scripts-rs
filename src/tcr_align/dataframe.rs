@@ -155,7 +155,7 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> Result<DataFrame>
     let lf = all_data
         .clone()
         .lazy()
-        .select([col("pattern"), col("TcRa"), col("TcRb")])
+        .select([col("pattern"), col("TcRa"), col("TcRb"), col("index")])
         .unique(None, UniqueKeepStrategy::First)
         // TcRa -> explode
         .with_columns([col("TcRa").str().split(lit(";")).alias("TcRa_list")])
@@ -197,7 +197,7 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> Result<DataFrame>
 
     // group and collect into list columns
     let grouped = lf
-        .group_by([col("pattern")])
+        .group_by([col("pattern"), col("index")])
         .agg([
             len().alias("n"),
             col("TcRa").unique().alias("TcRa"), // list
@@ -521,8 +521,8 @@ fn calculate_scores(
 ) {
     let height = groups.height();
     let (pb, inner_pb) = dual_progress_bars(
-        n_replicates as u64,
-        Some(height as u64),
+        height as u64,
+        Some(n_replicates as u64),
         ProgressSettings::Position,
         ProgressSettings::Position,
         Progress::Progress,
