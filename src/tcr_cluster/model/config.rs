@@ -110,15 +110,17 @@ pub enum ClusterMethod {
     /// distance matrix. One pass covers every threshold and no graph is built.
     SingleLinkage,
     /// Connected components of an igraph graph built for each threshold. Same clusters as
-    /// `single-linkage` but slower and memory-hungry at large thresholds; the entry point
-    /// for graph-based methods (e.g. Leiden, Louvain).
-    GraphComponents,
+    /// `single-linkage` but slower and memory-hungry at large thresholds
+    ConnectedComponents,
+    /// Louvain clustering of an igraph graph clustered at multiple resolutions
+    #[value(skip)]
+    Louvain,
 }
 
 impl ClusterMethod {
     /// Whether the method needs an igraph graph per threshold.
     pub fn needs_graph(self) -> bool {
-        matches!(self, Self::GraphComponents)
+        matches!(self, Self::ConnectedComponents | Self::Louvain)
     }
 }
 
@@ -127,7 +129,8 @@ impl std::fmt::Display for ClusterMethod {
         f.write_str(match self {
             Self::SharedNeighbor => "shared-neighbor",
             Self::SingleLinkage => "single linkage",
-            Self::GraphComponents => "graph connected components",
+            Self::ConnectedComponents => "graph connected components",
+            Self::Louvain => "Louvain",
         })
     }
 }

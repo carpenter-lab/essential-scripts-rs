@@ -551,6 +551,10 @@ pub fn graph_components(graph: &Graph) -> anyhow::Result<Vec<u32>> {
         .map(|cc| cc.membership)
 }
 
+pub fn graph_louvain(_graph: &Graph) -> anyhow::Result<Vec<u32>> {
+    anyhow::bail!("NotImplemented: Louvain clustering")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
