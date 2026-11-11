@@ -5,13 +5,10 @@ use crate::progress::{ProgressSettings, progress_bar_with_message};
 use anyhow::Context;
 use rayon::prelude::*;
 use rust_igraph::Graph;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::{Add, AddAssign, Index, Mul, MulAssign};
 use std::sync::atomic::{AtomicUsize, Ordering};
-
-use std::array;
 
 /// Block width for the SIMD-friendly kernels below. Fixed-size blocks give LLVM a known
 /// trip count with no bounds checks, so the inner loops auto-vectorize on stable Rust
@@ -248,147 +245,59 @@ fn build_fast_dist_matrix_u8(
     fast_matrix
 }
 
-#[inline(always)]
-pub fn needleman_wunsch_simd<const LANES: usize>(
-    seq1: &[u8],
-    seqs2: [&[u8]; LANES],
-    fast_matrix: &FastDistMatrixU8,
-    gap_penalty: u8,
-    max_cap: u8,
-    scratch: &mut Vec<[u8; LANES]>, // Pass as a mutable Vec so we can resize safely!
-) -> [u8; LANES] {
-    let m = seq1.len();
-    let n = seqs2[0].len();
-    let fail_score = max_cap.saturating_add(1);
+/// CDR3 residues tcrdist3 leaves out of the comparison at the N- and C-terminus.
+const CDR3_NTRIM: usize = 3;
+const CDR3_CTRIM: usize = 2;
 
-    // O(1) Length Pruning across all lanes at once
-    let len_diff = (m.abs_diff(n) as u8).saturating_mul(gap_penalty);
-    if len_diff >= max_cap {
-        return [fail_score; LANES];
+/// tcrdist3's CDR3 distance (pwseqdist `nb_tcrdist` with tcrdist3's CDR3 settings:
+/// `ntrim=3, ctrim=2, fixed_gappos=False`), before the CDR3 weight is applied.
+///
+/// - Equal lengths: no gaps; the substitution distances at each position are summed,
+///   skipping the first 3 and last 2 residues.
+/// - Unequal lengths: one contiguous gap block of the length difference, costing
+///   `gap_penalty` per missing residue, is placed in the longer sequence. Residues before
+///   it are compared from the N-terminus and residues after it from the C-terminus, and
+///   the block position giving the smallest distance is used. Positions searched are
+///   `5..=short_len - 5`, shifted down symmetrically for sequences shorter than 10.
+///
+/// Saturates at 255.
+#[inline]
+pub fn tcrdist_cdr3(a: &[u8], b: &[u8], fast_matrix: &FastDistMatrixU8, gap_penalty: u8) -> u8 {
+    let d = |x: u8, y: u8| u32::from(fast_matrix[x as usize][y as usize]);
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    let (s_len, l_len) = (short.len(), long.len());
+    let gap = (l_len - s_len) as u32 * u32::from(gap_penalty);
+    if gap >= u32::from(u8::MAX) {
+        return u8::MAX;
+    }
+    if s_len == l_len {
+        let total: u32 = (CDR3_NTRIM..s_len.saturating_sub(CDR3_CTRIM))
+            .map(|i| d(a[i], b[i]))
+            .sum();
+        return total.min(u32::from(u8::MAX)) as u8;
     }
 
-    let width = n + 1;
-
-    // SAFE DYNAMIC RESIZING:
-    // Ensure the scratch buffer is at least `width` elements long.
-    if scratch.len() < width {
-        scratch.resize(width, [0; LANES]);
+    let (mut min_pos, mut max_pos) = (5isize, s_len as isize - 5);
+    while min_pos > max_pos {
+        min_pos -= 1;
+        max_pos += 1;
     }
-    let dp_slice = &mut scratch[..width];
-
-    // Base cases: Row 0 initialization
-    for (j, cell) in dp_slice.iter_mut().enumerate() {
-        *cell = [(j as u8).saturating_mul(gap_penalty); LANES];
-    }
-
-    let gap_vec = [gap_penalty; LANES];
-
-    // Main DP loop
-    for i in 1..=m {
-        let char1 = seq1[i - 1] as usize;
-        let cost_row = &fast_matrix[char1];
-
-        let mut prev_diag = dp_slice[0];
-        let mut left = [(i as u8).saturating_mul(gap_penalty); LANES];
-        dp_slice[0] = left;
-
-        let mut row_min = left;
-
-        for j in 1..=n {
-            let char_dists: [u8; LANES] =
-                array::from_fn(|lane| cost_row[seqs2[lane][j - 1] as usize]);
-
-            let up = dp_slice[j];
-            let mut best = [0u8; LANES];
-
-            for lane in 0..LANES {
-                let match_mismatch = prev_diag[lane].saturating_add(char_dists[lane]);
-                let gap_seq2 = up[lane].saturating_add(gap_vec[lane]);
-                let gap_seq1 = left[lane].saturating_add(gap_vec[lane]);
-
-                let b = match_mismatch.min(gap_seq2).min(gap_seq1);
-                best[lane] = b;
-                row_min[lane] = row_min[lane].min(b);
-            }
-
-            prev_diag = up;
-            left = best;
-            dp_slice[j] = best;
-        }
-
-        // SIMD Early-Exit
-        if row_min.iter().all(|&min_val| min_val >= max_cap) {
-            return [fail_score; LANES];
+    let mut best = u32::MAX;
+    for gap_pos in min_pos..=max_pos {
+        let gap_pos = gap_pos as usize;
+        let n_side: u32 = (CDR3_NTRIM..gap_pos).map(|i| d(short[i], long[i])).sum();
+        let c_side: u32 = (CDR3_CTRIM..s_len - gap_pos)
+            .map(|c| d(short[s_len - 1 - c], long[l_len - 1 - c]))
+            .sum();
+        best = best.min(n_side + c_side);
+        if best == 0 {
+            break;
         }
     }
-
-    dp_slice[n]
+    (best + gap).min(u32::from(u8::MAX)) as u8
 }
 
-#[inline(always)]
-fn needleman_wunsch_u8(
-    seq1: &[u8],
-    seq2: &[u8],
-    fast_matrix: &FastDistMatrixU8,
-    gap_penalty: u8,
-    max_cap: u8, // Typically 255 (or your highest planned threshold + 1)
-    scratch: &mut Vec<u8>,
-) -> u8 {
-    let m = seq1.len();
-    let n = seq2.len();
-
-    // Length pruning
-    let len_diff = (m.abs_diff(n) as u8).saturating_mul(gap_penalty);
-    if len_diff >= max_cap {
-        return max_cap;
-    }
-
-    let width = n + 1;
-    if scratch.len() < width {
-        scratch.resize(width, 0);
-    }
-    let dp = &mut scratch[..width];
-
-    for (j, cell) in dp.iter_mut().enumerate() {
-        *cell = (j as u8).saturating_mul(gap_penalty);
-    }
-
-    for i in 1..=m {
-        let char1 = seq1[i - 1] as usize;
-        let cost_row = &fast_matrix[char1];
-
-        let mut prev_diag = dp[0];
-        let mut left = (i as u8).saturating_mul(gap_penalty);
-        dp[0] = left;
-        let mut row_min = left;
-
-        for j in 1..=n {
-            let char2 = seq2[j - 1] as usize;
-            let char_dist = cost_row[char2];
-
-            let up = dp[j];
-            let match_mismatch = prev_diag.saturating_add(char_dist);
-            let gap_seq2 = up.saturating_add(gap_penalty);
-            let gap_seq1 = left.saturating_add(gap_penalty);
-
-            let best = match_mismatch.min(gap_seq2).min(gap_seq1);
-
-            prev_diag = up;
-            left = best;
-            dp[j] = best;
-            row_min = row_min.min(best);
-        }
-
-        // Early-exit if every possible path through this row exceeds max_cap
-        if row_min >= max_cap {
-            return max_cap;
-        }
-    }
-
-    dp[n]
-}
-
-fn compute_lower_triangle_matrix_simd_u8<const LANES: usize>(
+fn compute_lower_triangle_matrix_u8(
     sequences: &[String],
     dist_matrix: &HashMap<(u8, u8), i32>,
     gap_penalty: i32,
@@ -401,18 +310,16 @@ fn compute_lower_triangle_matrix_simd_u8<const LANES: usize>(
     }
 
     let fast_matrix = build_fast_dist_matrix_u8(dist_matrix, gap_penalty);
-    let fail_score = max_cap.saturating_add(1);
     let total_pairs = n * (n - 1) / 2;
+    let mut flat_distances = vec![u8::MAX; total_pairs];
 
-    let mut flat_distances = vec![fail_score; total_pairs];
-
-    // Group sequence slices by byte length
+    // Group sequence slices by byte length, so pairs whose length difference alone
+    // exceeds `max_cap` are never visited.
     let max_len = sequences.iter().map(|s| s.len()).max().unwrap_or(0);
     let mut length_buckets: Vec<Vec<(usize, &[u8])>> = vec![Vec::new(); max_len + 1];
     for (idx, seq) in sequences.iter().enumerate() {
         length_buckets[seq.len()].push((idx, seq.as_bytes()));
     }
-
     let max_len_diff = if gap_penalty > 0 {
         (max_cap as usize) / (gap_penalty as usize)
     } else {
@@ -428,7 +335,7 @@ fn compute_lower_triangle_matrix_simd_u8<const LANES: usize>(
         remainder = rest;
     }
 
-    // Interleave small and large rows for perfect thread load balancing
+    // Interleave small and large rows for thread load balancing
     let mut balanced_rows = Vec::with_capacity(n - 1);
     let mut iter = row_slices.into_iter();
     while let Some(front) = iter.next() {
@@ -436,18 +343,6 @@ fn compute_lower_triangle_matrix_simd_u8<const LANES: usize>(
         if let Some(back) = iter.next_back() {
             balanced_rows.push(back);
         }
-    }
-
-    // Thread-local scratch buffers adapt dynamically to LANES
-    thread_local! {
-        static SIMD_SCRATCH: RefCell<Vec<[u8; 0]>> = const { RefCell::new(Vec::new()) }; // Stub fallback
-        static SCALAR_SCRATCH: RefCell<Vec<u8>> = RefCell::new(Vec::with_capacity(64));
-    }
-
-    // Concrete scratch type allocation per thread
-    thread_local! {
-        // We use dynamic raw allocations inside RefCell to safely handle generic array sizes
-        static GENERIC_SIMD_SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     }
 
     let pb = progress_bar_with_message(
@@ -460,54 +355,15 @@ fn compute_lower_triangle_matrix_simd_u8<const LANES: usize>(
     balanced_rows.into_par_iter().for_each(|(i, row_slice)| {
         let bytes_i = sequences[i].as_bytes();
         let len_i = bytes_i.len();
-
         let min_bucket = len_i.saturating_sub(max_len_diff);
         let max_bucket = (len_i + max_len_diff).min(max_len);
 
-        // 1. Allocate a fresh, 100% safe local DP row buffer for this thread.
-        // Since this happens once per ROW (not per alignment!), there is virtually zero overhead.
-        let mut simd_scratch = Vec::with_capacity(max_len + 1);
-
-        SCALAR_SCRATCH.with(|scalar_cell| {
-            let mut scalar_scratch = scalar_cell.borrow_mut();
-
-            for bucket in length_buckets.iter().take(max_bucket + 1).skip(min_bucket) {
-                let cutoff = bucket.partition_point(|&(j, _)| j < i);
-                let valid_targets = &bucket[..cutoff];
-
-                // A. Chunking by LANES
-                let (chunks, remainder_targets) = valid_targets.as_chunks::<LANES>();
-
-                for chunk in chunks {
-                    let seqs2: [&[u8]; LANES] = array::from_fn(|lane| chunk[lane].1);
-
-                    let scores = needleman_wunsch_simd::<LANES>(
-                        bytes_i,
-                        seqs2,
-                        &fast_matrix,
-                        gap_penalty as u8,
-                        max_cap,
-                        &mut simd_scratch, // Pure safe array slice!
-                    );
-
-                    for lane in 0..LANES {
-                        row_slice[chunk[lane].0] = scores[lane];
-                    }
-                }
-
-                // B. Remainder (0..LANES-1 targets)
-                for &(j, bytes_j) in remainder_targets {
-                    row_slice[j] = needleman_wunsch_u8(
-                        bytes_i,
-                        bytes_j,
-                        &fast_matrix,
-                        gap_penalty as u8,
-                        max_cap,
-                        &mut scalar_scratch,
-                    );
-                }
+        for bucket in length_buckets.iter().take(max_bucket + 1).skip(min_bucket) {
+            let cutoff = bucket.partition_point(|&(j, _)| j < i);
+            for &(j, bytes_j) in &bucket[..cutoff] {
+                row_slice[j] = tcrdist_cdr3(bytes_i, bytes_j, &fast_matrix, gap_penalty as u8);
             }
-        });
+        }
         let prev = pending_progress.fetch_add(i, Ordering::Relaxed);
         if prev + i >= 100_000 {
             let accumulated = pending_progress.swap(0, Ordering::Relaxed);
@@ -538,13 +394,7 @@ pub fn compute_matrix_auto_detect(
     max_cap: u8,
     name: &str,
 ) -> anyhow::Result<TcrDistanceMatrix> {
-    compute_lower_triangle_matrix_simd_u8::<LANES>(
-        sequences,
-        dist_matrix,
-        gap_penalty,
-        max_cap,
-        name,
-    )
+    compute_lower_triangle_matrix_u8(sequences, dist_matrix, gap_penalty, max_cap, name)
 }
 
 /// Position-wise distance between two IMGT-aligned germline CDRs (tcrdist's fixed gap
@@ -660,6 +510,7 @@ pub fn add_germline_distances(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tcr_cluster::blosum::Chain;
     pub fn compute_germline_matrix(
         cdrs: &[&VGeneCdrs],
         dist_matrix: &HashMap<(u8, u8), i32>,
@@ -673,6 +524,109 @@ mod tests {
         add_germline_distances(&mut matrix, cdrs, dist_matrix, gap_penalty, weight, name)?;
         Ok(matrix)
     }
+
+    fn blosum_fast_matrix() -> Box<FastDistMatrixU8> {
+        let m = crate::tcr_cluster::blosum::AminoAcidSubMatrix::Blosum62
+            .build_mismatch_matrix(4, &Chain::Beta);
+        build_fast_dist_matrix_u8(&m, 4)
+    }
+
+    /// Line-by-line port of pwseqdist's `nb_tcrdist` with tcrdist3's CDR3 settings
+    /// (`ntrim=3, ctrim=2, fixed_gappos=False, dist_weight=1`), keeping Python's argument
+    /// order and empty-range semantics.
+    fn nb_tcrdist_reference(seq1: &[u8], seq2: &[u8], m: &FastDistMatrixU8, gap: u32) -> u32 {
+        let d = |x: u8, y: u8| u32::from(m[x as usize][y as usize]);
+        let (q_l, s_l) = (seq1.len() as isize, seq2.len() as isize);
+        let (ntrim, ctrim) = (3isize, 2isize);
+        if q_l == s_l {
+            return (ntrim..q_l - ctrim)
+                .map(|i| d(seq1[i as usize], seq2[i as usize]))
+                .sum();
+        }
+        let short_len = q_l.min(s_l);
+        let len_diff = (q_l - s_l).unsigned_abs() as u32;
+        let (mut min_gappos, mut max_gappos) = (5isize, short_len - 1 - 4);
+        while min_gappos > max_gappos {
+            min_gappos -= 1;
+            max_gappos += 1;
+        }
+        let mut min_dist: Option<u32> = None;
+        for gappos in min_gappos..=max_gappos {
+            let mut tmp = 0;
+            let remainder = short_len - gappos;
+            for n_i in ntrim..gappos {
+                tmp += d(seq1[n_i as usize], seq2[n_i as usize]);
+            }
+            for c_i in ctrim..remainder {
+                tmp += d(
+                    seq1[(q_l - 1 - c_i) as usize],
+                    seq2[(s_l - 1 - c_i) as usize],
+                );
+            }
+            if min_dist.is_none_or(|m| tmp < m) {
+                min_dist = Some(tmp);
+            }
+            if min_dist == Some(0) {
+                break;
+            }
+        }
+        min_dist.unwrap() + len_diff * gap
+    }
+
+    #[test]
+    fn cdr3_distance_matches_hand_checked_tcrdist3_values() {
+        let m = blosum_fast_matrix();
+        let dist = |a: &str, b: &str| tcrdist_cdr3(a.as_bytes(), b.as_bytes(), &m, 4);
+        // Differences only in the trimmed first 3 / last 2 residues are ignored.
+        assert_eq!(dist("CASSLGQETQYF", "CSRSLGQETQWY"), 0);
+        // One L->P substitution: min(4, 4 - (-3)) = 4.
+        assert_eq!(dist("CASSLGQETQYF", "CASSPGQETQYF"), 4);
+        // Inserted G inside the gap window: the gap alone.
+        assert_eq!(dist("CASSLGQETQYF", "CASSLGGQETQYF"), 4);
+        assert_eq!(dist("CASSLGGQETQYF", "CASSLGQETQYF"), 4);
+        // Same length, shifted by one: no gaps allowed, so every shifted position counts
+        // (a free alignment would pay one insertion + one deletion = 8).
+        assert!(dist("CASSGLGQETQYF", "CASSLGQETQYFF") > 8);
+        // An insertion next to the C-terminus can't put its gap there: the residues
+        // between the gap window and the insertion are compared out of register.
+        assert!(dist("CASSLGQETQYF", "CASSLGQETQAYF") > 4);
+    }
+
+    #[test]
+    fn cdr3_distance_matches_pwseqdist_port() {
+        let m = blosum_fast_matrix();
+        let alphabet = b"ACDEFGHIKLMNPQRSTVWY";
+        let mut state = 0x2545_F491u32;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        let mut random_seq = |len: usize| -> Vec<u8> {
+            (0..len)
+                .map(|_| alphabet[next() as usize % alphabet.len()])
+                .collect()
+        };
+        for len_a in 0usize..20 {
+            for len_b in len_a.saturating_sub(4)..=len_a + 4 {
+                for _ in 0..20 {
+                    let a = random_seq(len_a);
+                    // Mostly-similar pairs so the gap search has close calls to get right.
+                    let mut b = random_seq(len_b);
+                    for (i, x) in b.iter_mut().enumerate().take(len_a.min(len_b)) {
+                        if i % 3 != 0 {
+                            *x = a[i];
+                        }
+                    }
+                    let want = nb_tcrdist_reference(&a, &b, &m, 4).min(255);
+                    assert_eq!(u32::from(tcrdist_cdr3(&a, &b, &m, 4)), want, "{a:?} {b:?}");
+                    assert_eq!(u32::from(tcrdist_cdr3(&b, &a, &m, 4)), want, "symmetric");
+                }
+            }
+        }
+    }
+
     #[test]
     fn to_igraph_keeps_all_vertices_and_only_edges_within_threshold() {
         // Lower triangle order: (1,0) (2,0) (2,1) (3,0) (3,1) (3,2)
@@ -770,8 +724,8 @@ mod tests {
 
     #[test]
     fn germline_matrix_scores_gaps_and_mismatches_per_allele_pair() {
-        let mismatch =
-            crate::tcr_cluster::blosum::AminoAcidSubMatrix::Blosum62.build_mismatch_matrix(4);
+        let mismatch = crate::tcr_cluster::blosum::AminoAcidSubMatrix::Blosum62
+            .build_mismatch_matrix(4, &Chain::Beta);
         let a = cdrs("MN.HEY", "SVG", "TDQ");
         let b = cdrs("MNAHEY", "SVG", "TDQ"); // one residue vs gap
         let c = cdrs("MN.HEY", "SVG", "TDQ"); // identical to a

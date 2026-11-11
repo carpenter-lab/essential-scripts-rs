@@ -1,5 +1,6 @@
-//! Single-linkage clustering straight from the distance matrix: the connected components of
-//! the "distance <= cutoff" graph, for several cutoffs at once, without building any graph.
+//! Linkage straight from the distance matrix, for several cutoffs at once, without building
+//! an igraph graph: single linkage (connected components of the "distance <= cutoff" graph)
+//! and shared-neighbor linkage (the same, keeping only links whose neighborhoods overlap).
 
 use super::distance::TcrDistanceMatrix;
 use rayon::prelude::*;
@@ -130,14 +131,191 @@ pub fn single_linkage_memberships(matrix: &TcrDistanceMatrix, cutoffs: &[u8]) ->
         .collect()
 }
 
+/// Every record's neighbors within `max_cutoff`, as `(index, distance)` sorted by index
+/// (the record itself excluded). Built from one parallel pass over the matrix; memory is
+/// one entry per neighbor, so `max_cutoff` must keep neighborhoods small.
+pub fn neighbor_lists(matrix: &TcrDistanceMatrix, max_cutoff: u8) -> Vec<Vec<(u32, u8)>> {
+    let n = matrix.dim;
+    assert!(u32::try_from(n).is_ok(), "Too many records for linkage");
+    let tri = matrix.lower_triangle();
+    // Row `i` of the lower triangle holds the neighbors `j < i`, in increasing order.
+    let lower: Vec<Vec<(u32, u8)>> = (0..n)
+        .into_par_iter()
+        .map(|i| {
+            let start = i * i.saturating_sub(1) / 2;
+            tri[start..start + i]
+                .iter()
+                .enumerate()
+                .filter(|&(_, &d)| d <= max_cutoff)
+                .map(|(j, &d)| (j as u32, d))
+                .collect()
+        })
+        .collect();
+    // Append each `i` to the lists of its lower neighbors. Rows are visited in increasing
+    // `i`, so every list stays sorted: its own lower entries, then the larger indices.
+    let mut lists: Vec<Vec<(u32, u8)>> = Vec::with_capacity(n);
+    for (i, row) in lower.into_iter().enumerate() {
+        for &(j, d) in &row {
+            lists[j as usize].push((i as u32, d));
+        }
+        lists.push(row);
+    }
+    lists
+}
+
+/// Shared-neighbor linkage for each of `cutoffs` (in the order given; each must be <= the
+/// cutoff `lists` were built with).
+///
+/// Records `i` and `j` within the cutoff are linked when the Jaccard index of their closed
+/// neighborhoods (each record plus its neighbors within the cutoff) is at least
+/// `min_overlap`; the result is the connected components of the kept links. Members of a
+/// tight group share most neighbors and stay linked, as does an isolated pair (overlap 1),
+/// while a single link between two dense groups shares few and is dropped. With
+/// `min_overlap` 0 this is single linkage.
+pub fn shared_neighbor_memberships(
+    lists: &[Vec<(u32, u8)>],
+    cutoffs: &[u8],
+    min_overlap: f32,
+) -> Vec<Vec<u32>> {
+    let n = lists.len();
+    cutoffs
+        .iter()
+        .map(|&cutoff| {
+            let degree: Vec<u32> = lists
+                .par_iter()
+                .map(|list| list.iter().filter(|&&(_, d)| d <= cutoff).count() as u32)
+                .collect();
+            let links: Vec<(u32, u32)> = (0..n)
+                .into_par_iter()
+                .flat_map_iter(|i| {
+                    let list_i = &lists[i];
+                    let degree = &degree;
+                    list_i
+                        .iter()
+                        .filter(move |&&(_, d)| d <= cutoff)
+                        .take_while(move |&&(j, _)| (j as usize) < i)
+                        .filter(move |&&(j, _)| {
+                            let shared = common_within(list_i, &lists[j as usize], cutoff);
+                            // Closed neighbourhoods: both also contain `i` and `j`.
+                            let inter = shared + 2;
+                            let union = degree[i] + degree[j as usize] + 2 - inter;
+                            inter as f32 >= min_overlap * union as f32
+                        })
+                        .map(move |&(j, _)| (i as u32, j))
+                })
+                .collect();
+            let mut forest = UnionFind::new(n);
+            for (i, j) in links {
+                forest.union(i, j);
+            }
+            forest.memberships()
+        })
+        .collect()
+}
+
+/// Number of indices present in both sorted lists with a distance <= `cutoff` in each.
+fn common_within(a: &[(u32, u8)], b: &[(u32, u8)], cutoff: u8) -> u32 {
+    let (mut x, mut y, mut count) = (0, 0, 0);
+    while x < a.len() && y < b.len() {
+        let ((ia, da), (ib, db)) = (a[x], b[y]);
+        match ia.cmp(&ib) {
+            std::cmp::Ordering::Less => x += 1,
+            std::cmp::Ordering::Greater => y += 1,
+            std::cmp::Ordering::Equal => {
+                if da <= cutoff && db <= cutoff {
+                    count += 1;
+                }
+                x += 1;
+                y += 1;
+            }
+        }
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tcr_cluster::tcrdist::clustering::graph_components;
+    use std::collections::HashSet;
 
     fn matrix(n: usize, flat: Vec<u8>) -> TcrDistanceMatrix {
         let names = (0..n).map(|i| i.to_string()).collect();
         TcrDistanceMatrix::from_flat(flat, names, n)
+    }
+
+    #[test]
+    fn shared_neighbours_cut_bridges_but_keep_pairs() {
+        // Two triangles {0,1,2} and {3,4,5} joined by the single link 2-3, plus an isolated
+        // pair {6,7}. Every listed link is at distance 1.
+        let n = 8;
+        let linked = [
+            (1, 0),
+            (2, 0),
+            (2, 1),
+            (3, 2),
+            (4, 3),
+            (5, 3),
+            (5, 4),
+            (7, 6),
+        ];
+        let mut flat = Vec::new();
+        for i in 1..n {
+            for j in 0..i {
+                flat.push(if linked.contains(&(i, j)) { 1 } else { 99 });
+            }
+        }
+        let m = matrix(n, flat);
+        let lists = neighbor_lists(&m, 1);
+        let single = &single_linkage_memberships(&m, &[1])[0];
+        assert_eq!(single[0], single[5], "single linkage chains through 2-3");
+
+        // Bridge 2-3: closed neighborhoods {0,1,2,3} and {2,3,4,5} share 2 of 6 = 0.33.
+        // Triangle links share 3 of 4 or more; the isolated pair shares 2 of 2.
+        let got = &shared_neighbor_memberships(&lists, &[1], 0.5)[0];
+        assert_eq!(got[0], got[1]);
+        assert_eq!(got[0], got[2]);
+        assert_eq!(got[3], got[4]);
+        assert_eq!(got[3], got[5]);
+        assert_ne!(got[2], got[3], "the bridge is cut");
+        assert_eq!(got[6], got[7], "an isolated pair stays linked");
+        assert_eq!(
+            shared_neighbor_memberships(&lists, &[1], 0.3)[0][2],
+            shared_neighbor_memberships(&lists, &[1], 0.3)[0][3],
+            "a lower overlap keeps the bridge"
+        );
+        // Cutoff 0: nothing is linked.
+        let none = &shared_neighbor_memberships(&lists, &[0], 0.5)[0];
+        assert_eq!(none.iter().collect::<HashSet<_>>().len(), n);
+    }
+
+    #[test]
+    fn zero_overlap_is_single_linkage() {
+        let n = 250;
+        let mut state = 0x9E37_79B9u32;
+        let flat: Vec<u8> = (0..n * (n - 1) / 2)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                (state % 256) as u8
+            })
+            .collect();
+        let m = matrix(n, flat);
+        let cutoffs = [0, 1, 3, 6];
+        let lists = neighbor_lists(&m, 6);
+        assert_eq!(
+            shared_neighbor_memberships(&lists, &cutoffs, 0.0),
+            single_linkage_memberships(&m, &cutoffs)
+        );
+        // Lists hold exactly the neighbors within the cutoff, sorted.
+        for (i, list) in lists.iter().enumerate() {
+            let want: Vec<(u32, u8)> = (0..n)
+                .filter(|&j| j != i && m[(i, j)] <= 6)
+                .map(|j| (j as u32, m[(i, j)]))
+                .collect();
+            assert_eq!(list, &want);
+        }
     }
 
     #[test]

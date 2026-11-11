@@ -265,7 +265,7 @@ pub fn select_longest_representative_motif(
             .into_iter()
             .next();
         if let Some(motif) = best
-            && (motif.support_fraction >= MIN_SUPPORT || k == K_MIN)
+            && (motif.support_fraction >= MIN_SUPPORT)
         {
             return Some(motif);
         }
@@ -322,22 +322,25 @@ fn wildcard_motif(
 /// beta chain) plus a motif for each chain.
 #[derive(Debug, Clone)]
 pub struct PairedCluster {
+    /// The CDR3-edit threshold the cluster was found at (0 for identical-sequence clusters).
     pub threshold: u8,
     pub cluster_id: u32,
     pub member_indices: Vec<usize>,
+    // Not written to the output yet; `cluster.pattern` carries the β consensus.
+    #[allow(dead_code)]
     pub alpha_motif: Option<BlosumMotif>,
+    #[allow(dead_code)]
     pub beta_motif: Option<BlosumMotif>,
     pub cluster: Cluster,
 }
 
+/// Two clusters are the same when they have the same members: everything else (motifs,
+/// pattern, Fisher score) is derived from the members, and the threshold and component ID
+/// only say where the cluster was found. Collecting thresholds in increasing order into a
+/// `HashSet` therefore keeps each distinct cluster once, at the smallest threshold.
 impl PartialEq<Self> for PairedCluster {
     fn eq(&self, other: &Self) -> bool {
-        self.threshold == other.threshold
-            && self.cluster_id == other.cluster_id
-            && self.member_indices == other.member_indices
-            && self.alpha_motif == other.alpha_motif
-            && self.beta_motif == other.beta_motif
-            && self.cluster == other.cluster
+        self.member_indices == other.member_indices
     }
 }
 
@@ -345,12 +348,7 @@ impl Eq for PairedCluster {}
 
 impl Hash for PairedCluster {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.threshold.hash(state);
-        self.cluster_id.hash(state);
         self.member_indices.hash(state);
-        self.alpha_motif.hash(state);
-        self.beta_motif.hash(state);
-        self.cluster.hash(state);
     }
 }
 
@@ -372,7 +370,6 @@ pub fn build_clusters_for_threshold(
     trim_flanks: bool,
     fisher_for: &(dyn Fn(&str) -> f64 + Sync),
     cluster_kind: &ClusterKind,
-    max_members: usize,
     pb: &ProgressBar,
 ) -> anyhow::Result<Vec<PairedCluster>> {
     // Group record indices by their cluster component ID
@@ -381,11 +378,10 @@ pub fn build_clusters_for_threshold(
         groups.entry(cluster_id).or_default().push(record_idx);
     }
 
-    // Skip singletons and uninformative giant components before any expensive
-    // deduplication or motif discovery.
+    // Skip singletons before any expensive deduplication or motif discovery.
     let mut groups: Vec<(u32, Vec<usize>)> = groups
         .into_iter()
-        .filter(|(_, members)| members.len() >= 2 && members.len() < max_members)
+        .filter(|(_, members)| members.len() >= 2)
         .collect();
     // Largest clusters first so the slowest motif searches start early instead of
     // becoming the tail of the parallel run.
@@ -564,6 +560,33 @@ mod tests {
             alpha: alpha.map(str::to_owned),
             ..ChainRecord::default()
         }
+    }
+
+    #[test]
+    fn same_members_at_a_larger_threshold_is_a_duplicate() {
+        let cluster = |threshold: u8, cluster_id: u32, members: Vec<usize>| PairedCluster {
+            threshold,
+            cluster_id,
+            member_indices: members,
+            alpha_motif: None,
+            beta_motif: None,
+            cluster: Cluster {
+                pattern: format!("p{threshold}"),
+                kind: ClusterKind::Global,
+                fisher_score: 1.0,
+                member_sequences: Vec::new(),
+            },
+        };
+        let found: HashSet<PairedCluster> = [
+            cluster(1, 7, vec![0, 1]),
+            cluster(2, 3, vec![0, 1]),
+            cluster(2, 4, vec![0, 1, 2]),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(found.len(), 2);
+        let pair = found.iter().find(|c| c.member_indices == [0, 1]).unwrap();
+        assert_eq!(pair.threshold, 1, "the smallest threshold is kept");
     }
 
     #[test]

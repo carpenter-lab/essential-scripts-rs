@@ -122,9 +122,26 @@ pub struct TcrDistArgs {
         long,
         value_enum,
         default_value_t = Default::default(),
-        help = "How records within each distance threshold are grouped into clusters"
+        help = "How records within each CDR3-edit threshold are grouped into clusters"
     )]
     pub cluster_method: ClusterMethod,
+
+    #[arg(
+        long,
+        default_value_t = crate::tcr_cluster::tcrdist::DEFAULT_MIN_NEIGHBOR_OVERLAP,
+        value_parser = parse_fraction,
+        help = "For shared-neighbor clustering: link two records within the threshold only if the Jaccard overlap of their neighborhoods (each record plus its neighbors) is at least this. 0 is single linkage; higher values split chains more readily"
+    )]
+    pub min_neighbor_overlap: f32,
+}
+
+fn parse_fraction(value: &str) -> Result<f32, String> {
+    let x: f32 = value.parse().map_err(|e| format!("{e}"))?;
+    if (0.0..=1.0).contains(&x) {
+        Ok(x)
+    } else {
+        Err("must be between 0 and 1".to_owned())
+    }
 }
 
 impl CommonArgs {

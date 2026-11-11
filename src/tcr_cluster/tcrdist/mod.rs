@@ -9,7 +9,7 @@ pub use lookup_cdr_seqs::TcrDistDb;
 use lookup_cdr_seqs::{ChainCdrs, VGeneCdrs, infer_record_cdrs};
 
 use crate::progress::{Progress, ProgressSettings, dual_progress_bars};
-use crate::tcr_cluster::blosum::AminoAcidSubMatrix;
+use crate::tcr_cluster::blosum::{AminoAcidSubMatrix, Chain};
 use crate::tcr_cluster::model::*;
 use crate::tcr_cluster::pipeline::ClusterFinder;
 use crate::tcr_cluster::stats;
@@ -22,9 +22,12 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
-const THRESHOLDS: [u8; 6] = [4, 8, 12, 18, 24, 30];
-/// Clusters containing at least this fraction of all records are considered uninformative.
-const MAX_CLUSTER_FRACTION: f32 = 0.25;
+/// Default `--min-neighbor-overlap` for shared-neighbor linkage.
+///
+/// Picked from a β-mode sweep on a 162k-record repertoire. At 0.3 one group still held a
+/// quarter of the records at 2 edits. 0.4 was the lowest value with no giant group at
+/// either threshold, and it kept 82% of GLIPH same-Vβ one-substitution pairs together.
+pub const DEFAULT_MIN_NEIGHBOR_OVERLAP: f32 = 0.4;
 
 /// The tcrdist cluster finder.
 pub struct TcrDist {
@@ -36,6 +39,9 @@ pub struct TcrDist {
     pub gene_db: Option<TcrDistDb>,
     /// How records within each threshold are grouped into clusters.
     pub cluster_method: ClusterMethod,
+    /// Smallest Jaccard overlap of two records' neighborhoods that links them, for
+    /// [`ClusterMethod::SharedNeighbor`].
+    pub min_neighbor_overlap: f32,
 }
 
 impl TcrDist {
@@ -86,11 +92,12 @@ fn joint_distance_matrix(
     sub_matrix: &AminoAcidSubMatrix,
 ) -> Result<TcrDistanceMatrix> {
     let mode = params.mode;
-    let mismatch_matrix = sub_matrix.build_mismatch_matrix(i32::from(params.max_mismatch));
-    let cdr3 = |seqs: &[String], name: &str| {
+    let mismatch_matrix =
+        sub_matrix.build_mismatch_matrix(i32::from(params.max_mismatch), &Chain::Beta);
+    let cdr3 = |seqs: &[String], name: &str, mm_matrix: &HashMap<_, i32>| {
         distance::compute_matrix_auto_detect(
             seqs,
-            &mismatch_matrix,
+            mm_matrix,
             i32::from(params.gap_penalty),
             u8::MAX,
             name,
@@ -100,13 +107,15 @@ fn joint_distance_matrix(
     };
 
     let beta: Vec<String> = records.iter().map(|r| r.beta.clone()).collect();
-    let mut total = cdr3(&beta, "CDR3β")?;
+    let mut total = cdr3(&beta, "CDR3β", &mismatch_matrix)?;
     if mode.uses_alpha() {
+        let mismatch_matrix =
+            sub_matrix.build_mismatch_matrix(i32::from(params.max_mismatch), &Chain::Alpha);
         let alpha: Vec<String> = records
             .iter()
             .map(|r| r.alpha.clone().unwrap_or_default())
             .collect();
-        total += cdr3(&alpha, "CDR3α")?;
+        total += cdr3(&alpha, "CDR3α", &mismatch_matrix)?;
     }
 
     if let Some(db) = gene_db.filter(|_| mode.uses_germline_cdrs()) {
@@ -137,6 +146,16 @@ fn joint_distance_matrix(
         bail!("Distance mode '{mode}' needs the tcrdist3 gene database");
     }
     Ok(total)
+}
+
+/// Number of groups of two or more records in `memberships`, and the size of the largest.
+fn group_summary(memberships: &[u32]) -> (usize, usize) {
+    let mut sizes: HashMap<u32, usize> = HashMap::new();
+    for &label in memberships {
+        *sizes.entry(label).or_default() += 1;
+    }
+    let groups = sizes.values().filter(|&&size| size >= 2).count();
+    (groups, sizes.values().copied().max().unwrap_or(0))
 }
 
 impl ClusterFinder for TcrDist {
@@ -198,7 +217,6 @@ impl ClusterFinder for TcrDist {
     ) -> Result<Vec<PairedCluster>> {
         let ref_seqs = reference.valid_sequences();
         let params = self.params_for(records);
-        params.check_thresholds(&THRESHOLDS);
         let distance_matrix = joint_distance_matrix(
             records,
             &params,
@@ -225,41 +243,60 @@ impl ClusterFinder for TcrDist {
             v
         };
 
-        let max_members = (records.len() as f32 * MAX_CLUSTER_FRACTION) as usize;
+        // Thresholds in CDR3 edits, from 1 up to the mode's maximum.
+        let thresholds: Vec<u8> = (1..=params.mode.max_cdr3_edits()).collect();
+        let cutoffs: Vec<u8> = thresholds
+            .iter()
+            .map(|&edits| params.edit_cutoff(edits))
+            .collect();
 
         let (opb, ipb) = dual_progress_bars(
-            THRESHOLDS.len() as u64,
+            thresholds.len() as u64,
             None,
             ProgressSettings::Position,
             ProgressSettings::Position,
             Progress::Progress,
         )?;
-        let cutoffs: Vec<u8> = THRESHOLDS
-            .iter()
-            .map(|&t| params.scaled_threshold(t))
-            .collect();
-        // Single linkage finds every threshold's components in one pass up front; graph
+        // Plain `eprintln!` would print over the live bars; this clears them first.
+        let log = |msg: String| opb.suspend(|| eprintln!("{msg}"));
+        // The matrix-based methods find every threshold's components up front; graph
         // methods build a graph per threshold instead.
-        let mut linkage = (!self.cluster_method.needs_graph()).then(|| {
-            opb.set_message("Linking records within each threshold");
-            linkage::single_linkage_memberships(&distance_matrix, &cutoffs)
-        });
-        let mut discovered: HashSet<PairedCluster> = THRESHOLDS
-            .into_iter()
-            .zip(cutoffs)
+        let mut levels: Option<Vec<Vec<u32>>> = match self.cluster_method {
+            ClusterMethod::SingleLinkage => {
+                opb.set_message("Linking records within each threshold");
+                Some(linkage::single_linkage_memberships(
+                    &distance_matrix,
+                    &cutoffs,
+                ))
+            }
+            ClusterMethod::SharedNeighbor => {
+                opb.set_message("Collecting neighbours");
+                let max_cutoff = cutoffs.iter().copied().max().unwrap_or(0);
+                let lists = linkage::neighbor_lists(&distance_matrix, max_cutoff);
+                opb.set_message("Linking records with shared neighbours");
+                Some(linkage::shared_neighbor_memberships(
+                    &lists,
+                    &cutoffs,
+                    self.min_neighbor_overlap,
+                ))
+            }
+            ClusterMethod::GraphComponents => None,
+        };
+        // Thresholds are visited in increasing order, so collecting into the set keeps each
+        // distinct cluster once, at its smallest threshold (see `PairedCluster`'s `Eq`).
+        let per_threshold: Vec<Vec<PairedCluster>> = thresholds
+            .iter()
+            .zip(&cutoffs)
             .enumerate()
-            .map(|(level, (threshold, cutoff))| {
-                opb.set_message(format!("Clustering with max distance {threshold}"));
+            .map(|(level, (&edits, &cutoff))| {
+                opb.set_message(format!("Clustering within {edits} CDR3 edits"));
                 // Show that the inner bar is idle while the graph is built, instead of
                 // leaving the previous threshold's count on screen.
                 ipb.reset();
                 ipb.set_length(0);
-                let memberships = match self.cluster_method {
-                    ClusterMethod::SingleLinkage => linkage
-                        .as_mut()
-                        .map(|levels| std::mem::take(&mut levels[level]))
-                        .expect("single linkage is computed up front"),
-                    ClusterMethod::GraphComponents => {
+                let memberships = match levels.as_mut() {
+                    Some(levels) => std::mem::take(&mut levels[level]),
+                    None => {
                         ipb.set_message("Building graph");
                         let graph = distance_matrix
                             .to_igraph(cutoff)
@@ -267,25 +304,33 @@ impl ClusterFinder for TcrDist {
                         graph_components(&graph).context("Failed to cluster graph")?
                     }
                 };
+                let (groups, largest) = group_summary(&memberships);
+                log(format!(
+                    "{edits} CDR3 edits (distance <= {cutoff}): {groups} groups, largest has \
+                     {largest} records ({:.1}%)",
+                    100.0 * largest as f64 / records.len() as f64
+                ));
                 let res = build_clusters_for_threshold(
-                    threshold,
+                    edits,
                     &memberships,
                     records,
                     &self.sub_matrix,
                     true,
                     &fisher_for,
                     &ClusterKind::Global,
-                    max_members,
                     &ipb,
                 )
                 .context("Failed to build clusters for threshold");
                 opb.inc(1);
                 res
             })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect();
+            .collect::<Result<_>>()?;
+        let found: usize = per_threshold.iter().map(Vec::len).sum();
+        let mut discovered: HashSet<PairedCluster> = per_threshold.into_iter().flatten().collect();
+        log(format!(
+            "Dropped {} clusters repeated at a larger threshold",
+            found - discovered.len()
+        ));
 
         ipb.finish_and_clear();
         opb.finish_and_clear();
@@ -381,6 +426,7 @@ TRAV1-2*01\thuman\tA\tV\tg\t+1\tX\t-\tTSG.FNG;VVL;DGL;CAVR
             infer_mode: false,
             gene_db: Some(TcrDistDb::from_tsv(DB, Organism::Human).unwrap()),
             cluster_method: ClusterMethod::default(),
+            min_neighbor_overlap: DEFAULT_MIN_NEIGHBOR_OVERLAP,
         }
     }
 
@@ -408,7 +454,7 @@ TRAV1-2*01\thuman\tA\tV\tg\t+1\tX\t-\tTSG.FNG;VVL;DGL;CAVR
             ),
             record(
                 "CASSIRSSYEQYF",
-                Some("CAVRDSNYQLVW"),
+                Some("CAVRDTNYQLIW"),
                 Some("TRBV9"),
                 Some("TRAV1-2"),
             ),

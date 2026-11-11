@@ -68,6 +68,7 @@ pub fn handle_command(command: Commands) -> Result<()> {
                 infer_mode: mode.is_none(),
                 gene_db,
                 cluster_method: tcrdist.cluster_method,
+                min_neighbor_overlap: tcrdist.min_neighbor_overlap,
             };
             run_command(&finder, &args).context("tcrdist analysis failed")
         }

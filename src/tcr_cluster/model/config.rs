@@ -56,6 +56,19 @@ impl DistanceMode {
         matches!(self, Self::AlphaBeta | Self::AlphaBetaFull)
     }
 
+    /// The largest number of CDR3 edits clustered in this mode. Chosen on a 160k-record
+    /// repertoire: at these budgets single linkage already joins a large share of the
+    /// records into one component in most modes (shared-neighbor linkage is needed to split
+    /// it), and an edit or two more puts nearly every record into it.
+    pub fn max_cdr3_edits(self) -> u8 {
+        match self {
+            Self::Beta => 2,
+            Self::BetaFull => 3,
+            Self::AlphaBeta => 5,
+            Self::AlphaBetaFull => 8,
+        }
+    }
+
     /// Whether the germline CDR1/CDR2/CDR2.5 inferred from the V genes are included.
     pub fn uses_germline_cdrs(self) -> bool {
         matches!(self, Self::BetaFull | Self::AlphaBetaFull)
@@ -86,9 +99,15 @@ impl std::fmt::Display for DistanceMode {
 /// How the tcrdist distances are split into clusters at each threshold.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum ClusterMethod {
+    /// Records within the threshold are linked only when their neighborhoods overlap
+    /// enough (Jaccard index of their closed neighborhoods at least
+    /// `--min-neighbor-overlap`); clusters are the connected components of the kept links.
+    /// A single link between two dense groups does not join them, so chaining is limited
+    /// by the same rule everywhere instead of a cluster size cap.
+    #[default]
+    SharedNeighbor,
     /// Connected components (single linkage) found with a union-find straight from the
     /// distance matrix. One pass covers every threshold and no graph is built.
-    #[default]
     SingleLinkage,
     /// Connected components of an igraph graph built for each threshold. Same clusters as
     /// `single-linkage` but slower and memory-hungry at large thresholds; the entry point
@@ -99,13 +118,14 @@ pub enum ClusterMethod {
 impl ClusterMethod {
     /// Whether the method needs an igraph graph per threshold.
     pub fn needs_graph(self) -> bool {
-        !matches!(self, Self::SingleLinkage)
+        matches!(self, Self::GraphComponents)
     }
 }
 
 impl std::fmt::Display for ClusterMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::SharedNeighbor => "shared-neighbor",
             Self::SingleLinkage => "single linkage",
             Self::GraphComponents => "graph connected components",
         })
@@ -136,28 +156,22 @@ impl DistanceParams {
             max_mismatch: 4,
         }
     }
-    /// Returns the number of chains in the distance mode.
-    fn chains(&self) -> u8 {
-        if self.mode.uses_alpha() { 2 } else { 1 }
-    }
-    /// `threshold` in CDR3-equivalent units, moved onto the weighted distance scale.
-    /// Capped at 254 (255 = saturated "too far").
-    pub fn scaled_threshold(&self, threshold: u8) -> u8 {
-        threshold
-            .saturating_mul(self.cdr3_weight)
-            .saturating_mul(self.chains())
-            .min(u8::MAX - 1)
-    }
-
-    pub fn check_thresholds(&self, thresholds: &[u8]) {
-        assert!(
-            thresholds.iter().all(|&t| {
-                t.checked_mul(self.cdr3_weight)
-                    .and_then(|x| x.checked_mul(self.chains()))
-                    .is_some_and(|x| x < 255)
-            }),
-            "Thresholds must be small enough that the scaled threshold does not saturate at 255. \
-            Consider using a smaller threshold or reducing the cdr3_weight."
-        );
+    /// The tcrdist cutoff for `edits` full CDR3 edits (a mismatch costing `max_mismatch`, or
+    /// one gap residue), summed over the chains in the mode and weighted like the CDR3s.
+    /// Germline CDR differences count against the same budget.
+    ///
+    /// # Panics
+    /// If the cutoff does not fit below 255 (the saturated "too far" distance).
+    pub fn edit_cutoff(&self, edits: u8) -> u8 {
+        edits
+            .checked_mul(self.max_mismatch)
+            .and_then(|x| x.checked_mul(self.cdr3_weight))
+            .filter(|&x| x < u8::MAX)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{edits} CDR3 edits do not fit the u8 distance scale; \
+                     use fewer edits or a smaller cdr3_weight"
+                )
+            })
     }
 }
