@@ -373,7 +373,7 @@ pub(crate) fn fraction_self_greater(
         &mut out_self_b,
         &mut out_frac,
         &mut rng,
-    );
+    )?;
 
     DataFrame::new_infer_height(vec![
         Series::new("pattern".into(), out_pattern).into(),
@@ -518,7 +518,7 @@ fn calculate_scores(
     out_self_b: &mut Vec<f64>,
     out_frac: &mut Vec<f64>,
     rng: &mut SmallRng,
-) {
+) -> Result<()> {
     let height = groups.height();
     let (pb, inner_pb) = dual_progress_bars(
         height as u64,
@@ -527,18 +527,12 @@ fn calculate_scores(
         ProgressSettings::Position,
         Progress::Progress,
     )
-    .expect("Failed to create dual progress bars in `calculate_scores`");
+    .context("Failed to create dual progress bars in `calculate_scores`")?;
 
-    let aligner = match build_protein_aligner(gap_open, gap_extend) {
-        Ok(aligner) => aligner,
-        Err(e) => {
-            eprintln!("Error building protein aligner: {e}");
-            return;
-        }
-    };
-
+    let aligner =
+        build_protein_aligner(gap_open, gap_extend).context("Failed to build protein aligner")?;
+    pb.set_message("Calculating scores");
     for i in 0..height {
-        inner_pb.set_message(format!("{:width$}", "", width = 33));
         let pattern = patterns.get(i).map_or("", |v| v);
         if pattern == "single" {
             pb.inc(1);
@@ -548,11 +542,7 @@ fn calculate_scores(
             out_frac.push(f64::NAN);
             continue;
         }
-        pb.set_message(format!(
-            "Calculating scores for {:width$}",
-            pattern,
-            width = 10
-        ));
+        inner_pb.set_message(pattern.to_string());
         let mut ctx = ScoreContext {
             rng,
             pb: &inner_pb,
@@ -591,6 +581,7 @@ fn calculate_scores(
         out_pattern.push(pattern.to_string());
         pb.inc(1);
     }
+    Ok(())
 }
 
 struct SingleChainResult {
@@ -636,7 +627,10 @@ fn calculate_single_chain_background_score(
     let mut greater_count = 0usize;
     if group_result.n_seqs > 1 && n_val > 0 && !group_result.is_nan() {
         for _rep in 0..n_replicates {
-            let background: Vec<String> = unique_seqs.sample(ctx.rng, n_val).cloned().collect();
+            let background: Vec<&str> = unique_seqs
+                .sample(ctx.rng, n_val)
+                .map(String::as_str)
+                .collect();
 
             let bg_mean = run_parasail(ctx.aligner, &background, None).unwrap_or_else(|e| {
                 eprintln!("Error running parasail for pattern {}: {e}", ctx.pattern);
@@ -704,6 +698,7 @@ mod tests {
             "pattern" => ["pat1", "pat1", "pat2"],
             "TcRa" => [Some("A;A"), Some("B"), Some("C;D")],
             "TcRb" => [Some("X"), Some("Y;Z"), None::<&str>],
+            "index" => [1i64, 1, 2],
         ]
         .unwrap();
 
@@ -754,6 +749,7 @@ mod tests {
             "pattern" => ["pat1", "pat1"],
             "TcRa" => [Some(" A ;A; ;A "), Some("A")],
             "TcRb" => [Some("X"), Some("X")],
+            "index" => [1i64, 1],
         ]
         .unwrap();
 
@@ -768,6 +764,7 @@ mod tests {
             "pattern" => ["single", "pat2"],
             "TcRa" => [Some("ACD;WQ"), Some("ACD;MN")],
             "TcRb" => [Some("MN;PQ"), Some("PQ;RS")],
+            "index" => [1i64, 2],
         ]
         .unwrap();
 
@@ -791,6 +788,7 @@ mod tests {
             "pattern" => ["pat1", "pat2"],
             "TcRa" => [Some("ACD"), Some("WQ;MN")],
             "TcRb" => [Some("MN;PQ"), Some("PQ;RS")],
+            "index" => [1i64, 2],
         ]
         .unwrap();
 

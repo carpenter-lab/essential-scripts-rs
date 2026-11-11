@@ -1,10 +1,8 @@
-use crate::io::WriteToCsvOrStdout;
+use crate::io::{WriteToCsvOrStdout, read_from_file};
 use crate::tcr_align::dataframe;
 use anyhow::{Context, Result};
 use polars::frame::DataFrame;
-use polars::prelude::{
-    DataFrameJoinOps, JoinArgs, JoinType, LazyCsvReader, LazyFileListReader, PlRefPath,
-};
+use polars::prelude::{DataFrameJoinOps, JoinArgs, JoinType};
 use std::path::PathBuf;
 
 /// A trait that represents a runnable operation or computation.
@@ -161,7 +159,8 @@ fn score_df(df: &DataFrame, replicates: usize) -> Result<DataFrame> {
         JoinArgs::new(JoinType::Right),
         None,
     )
-    .context("Failed to join DataFrame with scored results")
+    .map_err(|e| anyhow::anyhow!("Failed to join DataFrame with scored results: {:?}", e))
+    //.context("Failed to join DataFrame with scored results")
 }
 
 /// Compute the TCR score for alignments from an input CSV file and save the results to an output file.
@@ -204,15 +203,9 @@ pub(crate) fn tcr_score(
     output_file: PathBuf,
     replicates: usize,
 ) -> Result<()> {
-    let df = LazyCsvReader::new(PlRefPath::try_from_pathbuf(input_file)?)
-        .finish()?
-        .collect()?;
+    let df = read_from_file(input_file, None)?.collect()?;
 
-    score_df(&df, replicates)
-        .context(
-            "Failed to score TCR alignments. Please check the input file format and try again.",
-        )?
-        .write_to_csv_or_stdout(output_file)
+    score_df(&df, replicates)?.write_to_csv_or_stdout(output_file)
 }
 
 #[cfg(test)]
@@ -227,6 +220,7 @@ mod tests {
             "pattern" => ["p1", "p2"],
             "TcRa" => [Some("A;B"), Some("C")],
             "TcRb" => [Some("X;Y"), Some("Z")],
+            "index" => [1i64, 2],
         ]
         .unwrap();
 
