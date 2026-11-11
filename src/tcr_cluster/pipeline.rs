@@ -59,7 +59,10 @@ where
                     let rows = members
                         .records
                         .iter()
-                        .map(|record| OutputRow::new(index, &members, &score, record))
+                        .map(|record| {
+                            OutputRow::new(index, &members, &score, record)
+                                .with_alpha_pattern(cluster.alpha_pattern())
+                        })
                         .collect();
                     Some((score, rows))
                 }
@@ -198,5 +201,55 @@ mod tests {
         let gliph1_result = run_gliph(&records, &reference, Algorithm::Gliph1);
         assert!(!gliph1_result.is_empty());
         assert!(gliph1_result.iter().all(|row| row.kind == "global"));
+        assert!(
+            result.iter().all(|row| row.alpha_pattern.is_none()),
+            "no CDR3α, no alpha motif"
+        );
+    }
+
+    #[test]
+    fn gliph_pipeline_reports_alpha_motif_of_cluster_members() {
+        let sample = [
+            ("CASSIRSSYEQYF", "CAVRDSNYQLIW"),
+            ("CASSIRSSYEQAF", "CAVRDTNYQLIW"),
+            ("CASSIRSSYEQVF", "CAVKDSNYQLIW"),
+        ];
+        let records = sample
+            .iter()
+            .enumerate()
+            .map(|(index, (beta, alpha))| ChainRecord {
+                alpha: Some((*alpha).to_owned()),
+                ..map_test_sample_to_chain_record(index, beta)
+            })
+            .collect::<Vec<_>>();
+        let alphabet = b"ACDEFGHIKLMNPQTVWY";
+        let reference = ReferenceData {
+            sequences: (0..30)
+                .map(|index| {
+                    let first = alphabet[index % alphabet.len()] as char;
+                    let second = alphabet[(index / alphabet.len()) % alphabet.len()] as char;
+                    format!("CAAAA{first}{second}F")
+                })
+                .collect(),
+            v_gene_frequencies: vec![("TRBV1".to_owned(), 1.0)],
+            cdr3_length_frequencies: vec![(13, 1.0)],
+            cluster_size_probabilities: Vec::new(),
+            cluster_size_sample_sizes: Vec::new(),
+        };
+
+        let result = run_gliph(&records, &reference, Algorithm::Gliph2);
+
+        let clustered: Vec<&OutputRow> = result
+            .iter()
+            .filter(|row| row.number_unique_cdr3 == 3)
+            .collect();
+        assert!(!clustered.is_empty());
+        for row in clustered {
+            let motif = row
+                .alpha_pattern
+                .as_deref()
+                .expect("clusters get an alpha motif");
+            assert!(motif.len() >= 3, "motif {motif}");
+        }
     }
 }

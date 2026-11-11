@@ -178,9 +178,6 @@ pub(super) fn global_fisher_candidates(
                 )
                 .expect("Failed to create contingency table for global cluster");
                 let (fisher, _) = log_fact_table.fishers_exact(&cont_table);
-                if fisher > config.fisher_threshold {
-                    continue;
-                }
 
                 clusters.push(Cluster::new(
                     tag.clone(),
