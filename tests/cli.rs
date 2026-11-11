@@ -172,3 +172,154 @@ fn copy_cellranger_outs_check_mode_runs() {
         .assert()
         .success();
 }
+
+/// Copies the trimmed immGLIPH reference fixtures into a fresh cache directory so
+/// the clustering commands run offline.
+#[cfg(feature = "base_cmd")]
+fn reference_cache() -> tempfile::TempDir {
+    let cache = tempdir().unwrap();
+    let fixtures =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/gliph_reference");
+    for name in ["reference_list.RData", "ref_cluster_sizes.RData"] {
+        fs::copy(fixtures.join(name), cache.path().join(name)).unwrap();
+    }
+    cache
+}
+
+/// Synthetic chains: three families of near-identical CDR3βs shared across subjects,
+/// plus unrelated singletons.
+#[cfg(feature = "base_cmd")]
+fn write_chains(path: &std::path::Path) {
+    let families = [
+        ("CASSLGQAYEQYF", "TRBV7-9", "CAVRDSNYQLIW", "TRAV12-2"),
+        ("CASSPDRGNTEAFF", "TRBV6-5", "CAMREGGSQGNLIF", "TRAV14/DV4"),
+        ("CSARDRTGNGYTF", "TRBV20-1", "CAASGGSYIPTF", "TRAV29/DV5"),
+    ];
+    let substitutions = ['A', 'G', 'S', 'T', 'N', 'D'];
+    let mut rows = String::from("CDR3b\tTRBV\tTRBJ\tCDR3a\tTRAV\tTRAJ\tsubject:condition\tcount\n");
+    for (family, (cdr3b, trbv, cdr3a, trav)) in families.iter().enumerate() {
+        for (i, aa) in substitutions.iter().enumerate() {
+            let mut seq: Vec<char> = cdr3b.chars().collect();
+            let position = 5 + (i % 3);
+            seq[position] = *aa;
+            let seq: String = seq.into_iter().collect();
+            let subject = format!("S{:02}", (family * 7 + i) % 5 + 1);
+            rows.push_str(&format!(
+                "{seq}\t{trbv}\tTRBJ2-7\t{cdr3a}\t{trav}\tTRAJ33\t{subject}:D0\t{}\n",
+                i + 1
+            ));
+        }
+    }
+    for (i, seq) in [
+        "CASSQETQYF",
+        "CASRWGGEQFF",
+        "CSVEGTSGRADTQYF",
+        "CASSYSTDTQYF",
+    ]
+    .iter()
+    .enumerate()
+    {
+        rows.push_str(&format!(
+            "{seq}\tTRBV5-1\tTRBJ1-1\t\t\t\tS0{}:D7\t1\n",
+            i + 1
+        ));
+    }
+    fs::write(path, rows).unwrap();
+}
+
+#[cfg(feature = "base_cmd")]
+fn write_hla(path: &std::path::Path) {
+    let mut rows = String::from(
+        "PID\tHLA-DPA1(L)\tHLA-DPA1(R)\tHLA-DPB1(L)\tHLA-DPB1(R)\tHLA-DQA1(L)\tHLA-DQA1(R)\tHLA-DQB1(L)\tHLA-DQB1(R)\tHLA-DRB1(L)\tHLA-DRB1(R)\tHLA-DRB3/4/5(L)\tHLA-DRB3/4/5(R)\n",
+    );
+    for subject in 1..=5 {
+        let drb1 = if subject % 2 == 0 {
+            "DRB1*04:01"
+        } else {
+            "DRB1*07:01"
+        };
+        rows.push_str(&format!(
+            "S{subject:02}\tDPA1*01:03\tDPA1*02:01\tDPB1*04:01\tNA\tDQA1*03:01\tDQA1*05:01\tDQB1*03:02\t\t{drb1}\tDRB1*15:01\tDRB4*01:03\tDRB5*01:01\n"
+        ));
+    }
+    fs::write(path, rows).unwrap();
+}
+
+#[cfg(feature = "base_cmd")]
+#[rstest]
+#[case::gliph2(&["run-gliph"][..])]
+#[case::gliph1(&["run-gliph", "--method", "gliph1"][..])]
+#[case::gliph2_blosum(&["run-gliph", "--sub-matrix", "blosum62"][..])]
+#[case::tcrdist_inferred(&["run-tcr-dist"][..])]
+#[case::tcrdist_beta_single(&["run-tcr-dist", "--distance-mode", "beta", "--cluster-method", "single-linkage"][..]
+)]
+#[case::tcrdist_graph(&["run-tcr-dist", "--distance-mode", "alpha-beta", "--cluster-method", "graph-components"][..]
+)]
+fn clustering_cli_runs_offline(#[case] command: &[&str]) {
+    let tmp = tempdir().unwrap();
+    let cache = reference_cache();
+    let chains = tmp.path().join("chains.tsv");
+    let hla = tmp.path().join("hla.tsv");
+    let output = tmp.path().join("out.tsv");
+    write_chains(&chains);
+    write_hla(&hla);
+
+    cargo_bin_cmd!("essential-scripts-rs")
+        .args(command)
+        .args([
+            chains.to_str().unwrap(),
+            output.to_str().unwrap(),
+            "--hla-file",
+            hla.to_str().unwrap(),
+            "--reference-cache-dir",
+            cache.path().to_str().unwrap(),
+            "--sim-depth",
+            "20",
+            "--cores",
+            "2",
+        ])
+        .assert()
+        .success();
+
+    let written = fs::read_to_string(&output).unwrap();
+    let header = written.lines().next().expect("output has a header");
+    assert!(header.contains("TcRb"), "unexpected header: {header}");
+    assert!(
+        written.lines().count() > 1,
+        "no clusters written:\n{written}"
+    );
+}
+
+#[cfg(feature = "base_cmd")]
+#[rstest]
+#[case::zero_sim_depth(&["--sim-depth", "0"][..])]
+#[case::bad_hla_threshold(&["--hla-threshold", "2"][..])]
+#[case::other_reference_missing(&["--reference", "human-v1-cd4"][..])]
+fn clustering_cli_rejects_invalid_input(#[case] extra: &[&str]) {
+    let tmp = tempdir().unwrap();
+    let cache = reference_cache();
+    let chains = tmp.path().join("chains.tsv");
+    write_chains(&chains);
+
+    cargo_bin_cmd!("essential-scripts-rs")
+        .args(["run-gliph", chains.to_str().unwrap(), "-"])
+        .args(["--reference-cache-dir", cache.path().to_str().unwrap()])
+        .args(extra)
+        .assert()
+        .failure();
+}
+
+#[cfg(feature = "base_cmd")]
+#[test]
+fn clustering_cli_rejects_out_of_range_neighbor_overlap() {
+    cargo_bin_cmd!("essential-scripts-rs")
+        .args([
+            "run-tcr-dist",
+            "in.tsv",
+            "out.tsv",
+            "--min-neighbor-overlap",
+            "1.5",
+        ])
+        .assert()
+        .failure();
+}

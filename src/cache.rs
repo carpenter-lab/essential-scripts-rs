@@ -108,3 +108,65 @@ pub fn cached_file(
     }
     Ok(path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{cache_path, cached_file, download_file};
+    use std::fs;
+
+    // A port nothing listens on, so downloads fail fast without touching the network.
+    const UNREACHABLE: &str = "http://127.0.0.1:9/reference.RData";
+
+    #[test]
+    fn cache_path_creates_the_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("nested").join("cache");
+        let path = cache_path(Some(&root), "file.RData").unwrap();
+        assert!(root.is_dir());
+        assert_eq!(path, root.join("file.RData"));
+    }
+
+    #[test]
+    fn cached_file_reuses_an_existing_file_without_downloading() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("file.RData"), b"cached").unwrap();
+        let path = cached_file(
+            Some(dir.path()),
+            "file.RData",
+            UNREACHABLE,
+            false,
+            true,
+            6,
+            "x",
+        )
+        .unwrap();
+        assert_eq!(fs::read(path).unwrap(), b"cached");
+    }
+
+    #[test]
+    fn cached_file_force_download_removes_the_old_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let cached = dir.path().join("file.RData");
+        fs::write(&cached, b"stale").unwrap();
+        let result = cached_file(
+            Some(dir.path()),
+            "file.RData",
+            UNREACHABLE,
+            true,
+            false,
+            0,
+            "",
+        );
+        assert!(result.is_err());
+        assert!(!cached.exists(), "stale cache file should be removed first");
+    }
+
+    #[test]
+    fn download_file_reports_connection_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("file.RData");
+        let err = download_file(UNREACHABLE, &target, true, 0, "").unwrap_err();
+        assert!(format!("{err:#}").contains(UNREACHABLE));
+        assert!(!target.exists());
+    }
+}

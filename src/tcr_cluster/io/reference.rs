@@ -220,9 +220,209 @@ pub fn load_reference(
 
 #[cfg(test)]
 mod tests {
-    use super::{load_reference, numeric_vector};
+    use super::*;
     use crate::tcr_cluster::References;
-    use rdstream::{RObject, Value};
+    use rdstream::{Document, Encoding, Format, RObject, Value};
+    use std::path::Path;
+
+    fn chr(values: &[&str]) -> RObject {
+        RObject::new(Value::Character(
+            values.iter().map(|v| Some((*v).to_owned())).collect(),
+        ))
+    }
+
+    fn real(values: &[f64]) -> RObject {
+        RObject::new(Value::Real(values.to_vec()))
+    }
+
+    fn named_list(items: Vec<(&str, RObject)>) -> RObject {
+        let names = chr(&items.iter().map(|(n, _)| *n).collect::<Vec<_>>());
+        let mut list = RObject::new(Value::List(items.into_iter().map(|(_, o)| o).collect()));
+        list.attributes.push(("names".to_owned(), names));
+        list
+    }
+
+    fn document(objects: Vec<(&str, RObject)>) -> Document {
+        Document {
+            format: Format::RData,
+            encoding: Encoding::Xdr,
+            version: 3,
+            writer_version: (4, 4, 0),
+            native_encoding: None,
+            root: RObject::new(Value::Pairlist {
+                sexptype: 2,
+                items: objects
+                    .into_iter()
+                    .map(|(n, o)| (Some(n.to_owned()), o))
+                    .collect(),
+            }),
+            environments: Vec::new(),
+            bytes_read: 0,
+        }
+    }
+
+    fn reference_doc(refseqs: RObject, vgenes: RObject, lengths: RObject) -> Document {
+        let selected = named_list(vec![
+            ("refseqs", refseqs),
+            ("vgene_frequencies", vgenes),
+            ("cdr3_length_frequencies", lengths),
+        ]);
+        document(vec![(
+            "reference_list",
+            named_list(vec![("human_v2.0_CD48", selected)]),
+        )])
+    }
+
+    fn valid_refseqs() -> RObject {
+        named_list(vec![
+            ("CDR3b", chr(&["CASSF", "CASRF"])),
+            ("TRBV", chr(&["TRBV2", "TRBV28"])),
+        ])
+    }
+
+    fn valid_vgenes() -> RObject {
+        named_list(vec![
+            ("vgene", chr(&["TRBV2", "TRBV28"])),
+            ("freq", real(&[0.25, 0.75])),
+        ])
+    }
+
+    fn valid_lengths() -> RObject {
+        named_list(vec![
+            ("len", RObject::new(Value::Integer(vec![12, 13]))),
+            ("freq", real(&[0.4, 0.6])),
+        ])
+    }
+
+    fn sizes_doc(original: RObject) -> Document {
+        document(vec![(
+            "ref_cluster_sizes",
+            named_list(vec![("original", original)]),
+        )])
+    }
+
+    #[test]
+    fn reference_data_reads_selected_reference() {
+        let doc = reference_doc(valid_refseqs(), valid_vgenes(), valid_lengths());
+        let data = reference_data(&doc, &References::HumanV2CD4CD8).unwrap();
+        assert_eq!(data.sequences, vec!["CASSF", "CASRF"]);
+        assert_eq!(
+            data.v_gene_frequencies,
+            vec![("TRBV2".to_owned(), 0.25), ("TRBV28".to_owned(), 0.75)]
+        );
+        assert_eq!(data.cdr3_length_frequencies, vec![(12, 0.4), (13, 0.6)]);
+    }
+
+    #[test]
+    fn reference_data_reports_missing_pieces() {
+        let doc = reference_doc(valid_refseqs(), valid_vgenes(), valid_lengths());
+        let err = reference_data(&doc, &References::MouseV1CD4).unwrap_err();
+        assert!(format!("{err:#}").contains("mouse_v1.0_CD4"));
+
+        let err = reference_data(&document(vec![]), &References::HumanV2CD4CD8).unwrap_err();
+        assert!(format!("{err:#}").contains("reference_list"));
+    }
+
+    #[test]
+    fn reference_data_rejects_mismatched_columns() {
+        let short_v = named_list(vec![
+            ("CDR3b", chr(&["CASSF", "CASRF"])),
+            ("TRBV", chr(&["TRBV2"])),
+        ]);
+        let doc = reference_doc(short_v, valid_vgenes(), valid_lengths());
+        assert!(reference_data(&doc, &References::HumanV2CD4CD8).is_err());
+
+        let short_freq = named_list(vec![
+            ("vgene", chr(&["TRBV2", "TRBV28"])),
+            ("freq", real(&[1.0])),
+        ]);
+        let doc = reference_doc(valid_refseqs(), short_freq, valid_lengths());
+        assert!(reference_data(&doc, &References::HumanV2CD4CD8).is_err());
+    }
+
+    #[test]
+    fn vector_helpers_reject_wrong_types_and_na() {
+        assert!(numeric_vector(&chr(&["x"]), "ctx").is_err());
+        assert!(character_vector(&real(&[1.0]), "ctx").is_err());
+        let with_na = RObject::new(Value::Character(vec![Some("a".into()), None]));
+        assert!(character_vector(&with_na, "ctx").is_err());
+    }
+
+    #[test]
+    fn cluster_size_table_drops_size_column_and_parses_names() {
+        let original = named_list(vec![
+            ("cluster.size", real(&[1.0, 2.0])),
+            ("125", real(&[0.9, 0.1])),
+            ("250", chr(&["0.8", "0.2"])),
+            ("label", RObject::new(Value::Logical(vec![1, 0]))),
+        ]);
+        let (matrix, sizes) = cluster_size_table(&sizes_doc(original)).unwrap();
+        assert_eq!(sizes, vec![125, 250]);
+        assert_eq!(matrix, vec![vec![0.9, 0.8], vec![0.1, 0.2]]);
+    }
+
+    #[test]
+    fn cluster_size_table_falls_back_to_default_sizes() {
+        let original = named_list(vec![("a", real(&[0.5])), ("b", real(&[0.5]))]);
+        let (_, sizes) = cluster_size_table(&sizes_doc(original)).unwrap();
+        assert_eq!(sizes, vec![125, 250]);
+    }
+
+    #[test]
+    fn cluster_size_table_rejects_malformed_tables() {
+        let bad_cases = vec![
+            // not a list
+            real(&[1.0]),
+            // fewer than two numeric columns
+            named_list(vec![("125", real(&[1.0]))]),
+            // ragged columns
+            named_list(vec![("125", real(&[1.0, 2.0])), ("250", real(&[1.0]))]),
+            // unparsable character cell
+            named_list(vec![("125", real(&[1.0])), ("250", chr(&["oops"]))]),
+            // NA character cell
+            named_list(vec![
+                ("125", real(&[1.0])),
+                ("250", RObject::new(Value::Character(vec![None]))),
+            ]),
+        ];
+        for original in bad_cases {
+            assert!(cluster_size_table(&sizes_doc(original)).is_err());
+        }
+
+        let mut unnamed = named_list(vec![("125", real(&[1.0])), ("250", real(&[1.0]))]);
+        unnamed.attributes[0].1 = RObject::new(Value::Character(vec![Some("125".into()), None]));
+        assert!(cluster_size_table(&sizes_doc(unnamed)).is_err());
+
+        let mut nameless = named_list(vec![("125", real(&[1.0])), ("250", real(&[1.0]))]);
+        nameless.attributes.clear();
+        assert!(cluster_size_table(&sizes_doc(nameless)).is_err());
+
+        let mut short_names = named_list(vec![("125", real(&[1.0])), ("250", real(&[1.0]))]);
+        short_names.attributes[0].1 = chr(&["125"]);
+        assert!(cluster_size_table(&sizes_doc(short_names)).is_err());
+    }
+
+    #[test]
+    fn loads_reference_from_cached_fixture_files() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/gliph_reference");
+        let cache = tempfile::tempdir().unwrap();
+        for name in ["reference_list.RData", "ref_cluster_sizes.RData"] {
+            std::fs::copy(fixtures.join(name), cache.path().join(name)).unwrap();
+        }
+        let reference =
+            load_reference(&References::HumanV2CD4CD8, Some(cache.path()), false).unwrap();
+        assert_eq!(reference.sequences.len(), 2000);
+        assert!(!reference.v_gene_frequencies.is_empty());
+        assert_eq!(reference.cluster_size_sample_sizes.len(), 9);
+    }
+
+    #[test]
+    fn load_rdata_reports_unparsable_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken.RData");
+        std::fs::write(&path, b"not an rdata file").unwrap();
+        assert!(load_rdata(&path).is_err());
+    }
 
     #[test]
     fn numeric_vector_accepts_integer_and_real_values() {
