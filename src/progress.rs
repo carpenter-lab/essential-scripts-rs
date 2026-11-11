@@ -158,7 +158,7 @@ pub fn progress_bar_with_message(
 
 fn set_progress_style(progress: &ProgressBar, template: &String) -> Result<()> {
     progress.set_style(
-        ProgressStyle::with_template(&template)?
+        ProgressStyle::with_template(template)?
             .progress_chars("=> ")
             .with_key(
                 "rate",

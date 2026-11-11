@@ -362,6 +362,7 @@ impl HasCluster for PairedCluster {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_clusters_for_threshold(
     threshold: u8,
     memberships: &[u32],
