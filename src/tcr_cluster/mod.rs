@@ -18,6 +18,8 @@ mod gliph;
 #[cfg(feature = "base_cmd")]
 mod io;
 #[cfg(feature = "base_cmd")]
+mod motif;
+#[cfg(feature = "base_cmd")]
 mod pipeline;
 #[cfg(feature = "base_cmd")]
 mod tcrdist;

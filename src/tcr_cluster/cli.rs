@@ -85,12 +85,18 @@ pub enum Commands {
     /// `index`, `pattern`, `number_subject`, `number_unique_cdr3`, `TcRb`,
     /// `Fisher_score`, `Freq`, `subject`, `condition`, `final_score`, `hla_score`,
     /// `vb_score`, `expansion_score`, `length_score`, `cluster_size_score`, `type`,
-    /// `ulTcRb`, `V`, `J`, `TcRa`, and the eight HLA columns above.
+    /// `ulTcRb`, `V`, `J`, `TcRa`, and the eight HLA columns above. When the input has
+    /// CDR3α sequences, a `pattern_alpha` column follows with the motif shared by each
+    /// cluster's CDR3αs (found as for `run-tcr-dist`), then `VA` and `JA` when alpha genes
+    /// are given.
     RunGliph {
         #[command(flatten)]
         args: CommonArgs,
     },
     /// Cluster chains using tcrdist distances and score the clusters
+    ///
+    /// Output matches `run-gliph`: `pattern` is the CDR3β motif of each cluster and, when
+    /// the input has CDR3α sequences, `pattern_alpha` is the CDR3α motif.
     RunTcrDist {
         #[command(flatten)]
         args: CommonArgs,

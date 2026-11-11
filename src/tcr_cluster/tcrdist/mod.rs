@@ -13,6 +13,7 @@ use crate::tcr_cluster::blosum::{AminoAcidSubMatrix, Chain};
 use crate::tcr_cluster::model::*;
 use crate::tcr_cluster::pipeline::ClusterFinder;
 use crate::tcr_cluster::stats;
+use crate::tcr_cluster::tcrdist::clustering::graph_louvain;
 use anyhow::{Context, Result, bail};
 pub use clustering::PairedCluster;
 use clustering::{build_clusters_for_threshold, build_exact_beta_clusters, graph_components};
@@ -270,17 +271,18 @@ impl ClusterFinder for TcrDist {
                 ))
             }
             ClusterMethod::SharedNeighbor => {
-                opb.set_message("Collecting neighbours");
+                opb.set_message("Collecting neighbors");
                 let max_cutoff = cutoffs.iter().copied().max().unwrap_or(0);
                 let lists = linkage::neighbor_lists(&distance_matrix, max_cutoff);
-                opb.set_message("Linking records with shared neighbours");
+                opb.set_message("Linking records with shared neighbors");
                 Some(linkage::shared_neighbor_memberships(
                     &lists,
                     &cutoffs,
                     self.min_neighbor_overlap,
                 ))
             }
-            ClusterMethod::GraphComponents => None,
+            ClusterMethod::ConnectedComponents => None,
+            ClusterMethod::Louvain => None,
         };
         // Thresholds are visited in increasing order, so collecting into the set keeps each
         // distinct cluster once, at its smallest threshold (see `PairedCluster`'s `Eq`).
@@ -301,7 +303,18 @@ impl ClusterFinder for TcrDist {
                         let graph = distance_matrix
                             .to_igraph(cutoff)
                             .context("Failed to convert distance matrix to graph")?;
-                        graph_components(&graph).context("Failed to cluster graph")?
+                        match self.cluster_method {
+                            ClusterMethod::ConnectedComponents => {
+                                graph_components(&graph).context("Failed to cluster graph")?
+                            }
+                            ClusterMethod::Louvain => graph_louvain(&graph)?,
+                            other => {
+                                bail!(
+                                    "Unexpected cluster method for graph construction: {:?}",
+                                    other
+                                )
+                            }
+                        }
                     }
                 };
                 let (groups, largest) = group_summary(&memberships);

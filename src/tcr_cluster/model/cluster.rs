@@ -117,6 +117,11 @@ pub trait HasCluster {
     /// Indices of the member records, in ascending order.
     fn member_indices(&self) -> &[usize];
 
+    /// Motif shared by the members' CDR3α sequences, if any (the `pattern_alpha` column).
+    fn alpha_pattern(&self) -> Option<&str> {
+        None
+    }
+
     fn members<'a>(&'a self, records: &'a [ChainRecord]) -> ClusterMembers<'a> {
         ClusterMembers::from_indices(records, self.cluster(), self.member_indices())
     }

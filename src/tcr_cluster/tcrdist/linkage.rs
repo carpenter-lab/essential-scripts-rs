@@ -245,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_neighbours_cut_bridges_but_keep_pairs() {
+    fn shared_neighbors_cut_bridges_but_keep_pairs() {
         // Two triangles {0,1,2} and {3,4,5} joined by the single link 2-3, plus an isolated
         // pair {6,7}. Every listed link is at distance 1.
         let n = 8;

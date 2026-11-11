@@ -9,23 +9,29 @@ fn write_rows<W: Write>(writer: W, rows: &[OutputRow]) -> Result<()> {
         .delimiter(b'\t')
         .has_headers(false)
         .from_writer(writer);
-    // VA/JA columns only appear when the input supplied alpha genes, so beta-only
-    // runs keep the original GLIPH column layout.
+    // The pattern_alpha and VA/JA columns only appear when the input supplied CDR3α
+    // sequences or alpha genes, so beta-only runs keep the original GLIPH column layout.
+    let include_alpha_pattern = rows.iter().any(OutputRow::has_alpha_cdr3);
     let include_alpha_genes = rows.iter().any(OutputRow::has_alpha_genes);
-    let header = OUTPUT_COLUMNS.iter().chain(
-        include_alpha_genes
-            .then_some(&ALPHA_GENE_COLUMNS)
-            .into_iter()
-            .flatten(),
-    );
+    let header = OUTPUT_COLUMNS
+        .iter()
+        .chain(include_alpha_pattern.then_some(&ALPHA_PATTERN_COLUMN))
+        .chain(
+            include_alpha_genes
+                .then_some(&ALPHA_GENE_COLUMNS)
+                .into_iter()
+                .flatten(),
+        );
     writer
         .write_record(header)
         .context("Failed to write GLIPH TSV header")?;
     for row in rows {
-        let result = if include_alpha_genes {
-            writer.serialize((row, &row.va_gene, &row.ja_gene))
-        } else {
-            writer.serialize(row)
+        let (pattern, va, ja) = (&row.alpha_pattern, &row.va_gene, &row.ja_gene);
+        let result = match (include_alpha_pattern, include_alpha_genes) {
+            (false, false) => writer.serialize(row),
+            (true, false) => writer.serialize((row, pattern)),
+            (false, true) => writer.serialize((row, va, ja)),
+            (true, true) => writer.serialize((row, pattern, va, ja)),
         };
         result.context("Failed to serialize a GLIPH result row")?;
     }
@@ -45,7 +51,9 @@ pub fn write_output(path: &Path, rows: &[OutputRow]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::write_output;
-    use crate::tcr_cluster::model::{ALPHA_GENE_COLUMNS, ChainRecord, OUTPUT_COLUMNS, OutputRow};
+    use crate::tcr_cluster::model::{
+        ALPHA_GENE_COLUMNS, ALPHA_PATTERN_COLUMN, ChainRecord, OUTPUT_COLUMNS, OutputRow,
+    };
     use std::fs;
     use tempfile::tempdir;
 
@@ -86,6 +94,7 @@ mod tests {
                 hla_drb5: String::new(),
                 va_gene: None,
                 ja_gene: None,
+                alpha_pattern: None,
             }],
         )
         .unwrap();
@@ -127,6 +136,7 @@ mod tests {
             hla_drb5: String::new(),
             va_gene: record.va_gene.clone(),
             ja_gene: record.ja_gene.clone(),
+            alpha_pattern: None,
         }
     }
 
@@ -168,6 +178,44 @@ mod tests {
         );
         assert_eq!(lines[2][n - 2..], ["", ""]);
         assert!(!text.contains("*01"));
+    }
+
+    #[test]
+    fn appends_alpha_pattern_column_when_input_has_cdr3a() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("result.tsv");
+        let paired = ChainRecord {
+            beta: "CASSIRSSYEQYF".to_owned(),
+            alpha: Some("CAVRDSNYQLIW".to_owned()),
+            va_gene: Some("TRAV12-2".to_owned()),
+            ..ChainRecord::default()
+        };
+        let beta_only = ChainRecord {
+            beta: "CASSPRSSYEQYF".to_owned(),
+            ..ChainRecord::default()
+        };
+        write_output(
+            &path,
+            &[
+                row_for(&paired).with_alpha_pattern(Some("RDSNYQ")),
+                row_for(&beta_only),
+            ],
+        )
+        .unwrap();
+
+        let text = fs::read_to_string(path).unwrap();
+        let lines: Vec<Vec<&str>> = text.lines().map(|l| l.split('\t').collect()).collect();
+        let expected_header: Vec<&str> = OUTPUT_COLUMNS
+            .iter()
+            .chain(&[ALPHA_PATTERN_COLUMN])
+            .chain(&ALPHA_GENE_COLUMNS)
+            .copied()
+            .collect();
+        assert_eq!(lines[0], expected_header);
+        let n = expected_header.len();
+        assert!(lines.iter().all(|l| l.len() == n));
+        assert_eq!(lines[1][n - 3..], ["RDSNYQ", "TRAV12-2", ""]);
+        assert_eq!(lines[2][n - 3..], ["", "", ""]);
     }
 
     #[test]

@@ -32,7 +32,11 @@ pub const OUTPUT_COLUMNS: [&str; 28] = [
     "HLA-DRB5",
 ];
 
-/// Appended after [`OUTPUT_COLUMNS`] only when the input provided alpha V/J genes.
+/// Appended after [`OUTPUT_COLUMNS`] only when the input provided CDR3α sequences.
+pub const ALPHA_PATTERN_COLUMN: &str = "pattern_alpha";
+
+/// Appended after [`OUTPUT_COLUMNS`] (and [`ALPHA_PATTERN_COLUMN`]) only when the input
+/// provided alpha V/J genes.
 pub const ALPHA_GENE_COLUMNS: [&str; 2] = ["VA", "JA"];
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -87,11 +91,25 @@ pub struct OutputRow {
     /// Alpha J gene as given in the input; written as `JA` only when alpha genes are present.
     #[serde(skip)]
     pub ja_gene: Option<String>,
+    /// Motif of the cluster's CDR3α sequences; written as `pattern_alpha` only when the
+    /// input has CDR3α sequences.
+    #[serde(skip)]
+    pub alpha_pattern: Option<String>,
 }
 
 impl OutputRow {
     pub fn has_alpha_genes(&self) -> bool {
         self.va_gene.is_some() || self.ja_gene.is_some()
+    }
+
+    pub fn has_alpha_cdr3(&self) -> bool {
+        self.tc_ra.as_deref().is_some_and(|alpha| !alpha.is_empty())
+    }
+
+    /// Sets the cluster's CDR3α motif.
+    pub fn with_alpha_pattern(mut self, pattern: Option<&str>) -> Self {
+        self.alpha_pattern = pattern.map(str::to_owned);
+        self
     }
 }
 
@@ -151,6 +169,7 @@ impl OutputRow {
             hla_drb5,
             va_gene: record.va_gene.clone(),
             ja_gene: record.ja_gene.clone(),
+            alpha_pattern: None,
         }
     }
 }

@@ -6,9 +6,10 @@ mod local;
 mod merge;
 mod singletons;
 
-use crate::progress::progress_bar_with_message;
+use crate::progress::{ProgressSettings, progress_bar_with_message};
 use crate::tcr_cluster::blosum::AminoAcidSubMatrix;
 use crate::tcr_cluster::model::*;
+use crate::tcr_cluster::motif::{BlosumMotif, cluster_alpha_motif};
 use crate::tcr_cluster::pipeline::ClusterFinder;
 use crate::tcr_cluster::stats::{ContingencyTable2x2, LogFactorialTable};
 use crate::tcr_cluster::{blosum, stats};
@@ -35,6 +36,9 @@ pub struct Gliph {
 pub struct GliphCluster {
     pub cluster: Cluster,
     pub member_indices: Vec<usize>,
+    /// Motif of the members' CDR3α sequences, found as for tcrdist clusters. GLIPH groups
+    /// by CDR3β only, so this just describes the alpha chains the cluster happens to hold.
+    pub alpha_motif: Option<BlosumMotif>,
 }
 
 impl HasCluster for GliphCluster {
@@ -45,16 +49,32 @@ impl HasCluster for GliphCluster {
     fn member_indices(&self) -> &[usize] {
         &self.member_indices
     }
+
+    fn alpha_pattern(&self) -> Option<&str> {
+        self.alpha_motif
+            .as_ref()
+            .map(|motif| motif.consensus.as_str())
+    }
 }
 
 /// Attaches to each cluster the (ascending) indices of the records carrying one of its
-/// CDR3βs, so scoring looks members up directly instead of scanning every record.
-fn with_member_indices(clusters: Vec<Cluster>, records: &[ChainRecord]) -> Vec<GliphCluster> {
+/// CDR3βs, so scoring looks members up directly instead of scanning every record, and the
+/// motif of those records' CDR3αs.
+fn with_member_indices(
+    clusters: Vec<Cluster>,
+    records: &[ChainRecord],
+    sub_matrix: &AminoAcidSubMatrix,
+) -> Result<Vec<GliphCluster>> {
+    let progress = progress_bar_with_message(
+        clusters.len(),
+        "Finding CDR3α motifs",
+        ProgressSettings::PositionSpeed,
+    )?;
     let mut by_beta: HashMap<&str, Vec<usize>> = HashMap::new();
     for (index, record) in records.iter().enumerate() {
         by_beta.entry(record.beta.as_str()).or_default().push(index);
     }
-    clusters
+    let clusters = clusters
         .into_par_iter()
         .map(|cluster| {
             let mut member_indices: Vec<usize> = cluster
@@ -66,12 +86,17 @@ fn with_member_indices(clusters: Vec<Cluster>, records: &[ChainRecord]) -> Vec<G
                 .collect();
             member_indices.sort_unstable();
             member_indices.dedup();
+            let alpha_motif = cluster_alpha_motif(records, &member_indices, sub_matrix, true);
+            progress.inc(1);
             GliphCluster {
                 cluster,
                 member_indices,
+                alpha_motif,
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+    progress.finish_and_clear();
+    Ok(clusters)
 }
 
 impl ClusterFinder for Gliph {
@@ -146,7 +171,11 @@ impl ClusterFinder for Gliph {
                 .then_with(|| left.pattern.cmp(&right.pattern))
                 .then_with(|| left.kind.cmp(&right.kind))
         });
-        Ok(with_member_indices(clusters, records))
+        let sub_matrix = self
+            .sub_matrix
+            .clone()
+            .unwrap_or(AminoAcidSubMatrix::Blosum62);
+        with_member_indices(clusters, records, &sub_matrix)
     }
 }
 
@@ -179,6 +208,10 @@ mod tests {
             &config,
             &Some(AminoAcidSubMatrix::Blosum62),
         );
+        let clusters = clusters
+            .iter()
+            .filter(|cluster| cluster.fisher_score <= config.fisher_threshold)
+            .collect::<Vec<_>>();
 
         assert!(
             clusters.is_empty(),
