@@ -114,6 +114,28 @@ fn split_sample_id_cli_runs() {
 }
 
 #[test]
+fn split_sample_id_cli_reads_stdin() {
+    let tmp = tempdir().unwrap();
+    let output = tmp.path().join("output.csv");
+
+    cargo_bin_cmd!("essential-scripts-rs")
+        .args([
+            "split-sample-id",
+            "-",
+            output.to_str().unwrap(),
+            "--column-name",
+            "subject:condition",
+        ])
+        .write_stdin("subject:condition;other\nsubj1:cond1;x\n")
+        .assert()
+        .success();
+
+    let written = fs::read_to_string(&output).unwrap();
+    assert!(written.contains("subj1"), "got: {written}");
+    assert!(written.contains("cond1"), "got: {written}");
+}
+
+#[test]
 fn tcr_match_cli_runs() {
     let tmp = tempdir().unwrap();
     let input_path = tmp.path().join("input.txt");
@@ -284,6 +306,19 @@ fn clustering_cli_runs_offline(#[case] command: &[&str]) {
     let written = fs::read_to_string(&output).unwrap();
     let header = written.lines().next().expect("output has a header");
     assert!(header.contains("TcRb"), "unexpected header: {header}");
+    let columns: Vec<&str> = header.split('\t').collect();
+    let alpha_pattern = columns
+        .iter()
+        .position(|c| *c == "pattern_alpha")
+        .unwrap_or_else(|| panic!("no pattern_alpha column: {header}"));
+    assert!(
+        written.lines().skip(1).any(|line| !line
+            .split('\t')
+            .nth(alpha_pattern)
+            .unwrap_or("")
+            .is_empty()),
+        "no alpha motif written:\n{written}"
+    );
     assert!(
         written.lines().count() > 1,
         "no clusters written:\n{written}"
