@@ -156,7 +156,7 @@ pub fn progress_bar_with_message(
     Ok(progress)
 }
 
-fn set_progress_style(progress: &ProgressBar, template: &String) -> Result<()> {
+fn set_progress_style(progress: &ProgressBar, template: &str) -> Result<()> {
     progress.set_style(
         ProgressStyle::with_template(template)?
             .progress_chars("=> ")
