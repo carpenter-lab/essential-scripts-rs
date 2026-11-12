@@ -246,8 +246,7 @@ fn hla_score(records: &ClusterMembers, ctx: &HlaContext) -> (f64, Vec<(usize, St
         }
     }
 
-    let draws = cluster_subjects.len();
-    if draws == 0 {
+    if cluster_subjects.is_empty() {
         return (1.0, Vec::new());
     }
 
@@ -256,6 +255,23 @@ fn hla_score(records: &ClusterMembers, ctx: &HlaContext) -> (f64, Vec<(usize, St
 
     // Iterate over pre-computed unique alleles per locus
     for locus_idx in 0..8 {
+        // Only subjects typed at this locus are known carriers or non-carriers. Untyped
+        // subjects (missing HLA rows or empty cells) would otherwise pad the non-carrier
+        // counts and make any allele shared by the typed few look enriched.
+        let (population, draws) = ctx
+            .subject_loci
+            .iter()
+            .filter(|(_, loci)| !loci[locus_idx].is_empty())
+            .fold((0, 0), |(population, draws), (subject, _)| {
+                let in_cluster = cluster_subjects.contains(subject.as_str());
+                (population + 1, draws + usize::from(in_cluster))
+            });
+        // Enrichment needs at least two typed cluster members (an allele must be shared)
+        // and typed subjects outside the cluster to compare against.
+        if draws < 2 || population == draws {
+            continue;
+        }
+
         for allele in &ctx.locus_unique_alleles[locus_idx] {
             let mut total_with = 0;
             let mut cluster_with = 0;
@@ -276,15 +292,9 @@ fn hla_score(records: &ClusterMembers, ctx: &HlaContext) -> (f64, Vec<(usize, St
                     cluster_with,
                     draws,
                     total_with - cluster_with,
-                    ctx.population_size - draws,
+                    population - draws,
                 )
                 .expect("Failed to create contingency table HLA");
-                // let p_value = stats::hypergeometric_tail(
-                //     ctx.population_size,
-                //     total_with,
-                //     draws,
-                //     cluster_with,
-                // );
                 let (p_value, _) = log_fact_table.fishers_exact(&cont_table);
 
                 best = best.min(p_value);
@@ -400,5 +410,57 @@ mod tests {
 
         assert!((score - 1.0 / 45.0).abs() < 1e-12, "score {score}");
         assert_eq!(hits, vec![(0, "DPA1*01:03".to_owned())]);
+    }
+
+    fn sspa_cluster() -> Cluster {
+        Cluster {
+            pattern: "SSAA".to_owned(),
+            kind: ClusterKind::Local,
+            fisher_score: 0.01,
+            member_sequences: vec!["CASSAAF".to_owned()],
+        }
+    }
+
+    #[test]
+    fn hla_score_ignores_untyped_subjects() {
+        // The 1/45 setup above, plus untyped subjects inside and outside the cluster. They
+        // have unknown genotypes, so they must not count as non-carriers on either side.
+        let mut records = vec![
+            record("S1", "CASSAAF", "DPA1*01:03"),
+            record("S2", "CASSAAF", "DPA1*01:03"),
+            record("U1", "CASSAAF", ""),
+        ];
+        for i in 3..=10 {
+            records.push(record(&format!("S{i}"), "CASSXXF", "DPA1*02:01"));
+        }
+        for i in 2..=10 {
+            records.push(record(&format!("U{i}"), "CASSXXF", ""));
+        }
+        let cluster = sspa_cluster();
+        let ctx = HlaContext::build(&records, 0.05);
+        let cluster_record = ClusterMembers::from_indices(&records, &cluster, &[0, 1, 2]);
+
+        let (score, hits) = hla_score(&cluster_record, &ctx);
+
+        assert!((score - 1.0 / 45.0).abs() < 1e-12, "score {score}");
+        assert_eq!(hits, vec![(0, "DPA1*01:03".to_owned())]);
+    }
+
+    #[test]
+    fn hla_score_skips_locus_without_typed_comparison_group() {
+        // Only the two cluster subjects are typed. Counting the 18 untyped subjects as
+        // non-carriers gave p = 1/190; with no typed comparison group there is no test.
+        let mut records = vec![
+            record("S1", "CASSAAF", "DPA1*01:03"),
+            record("S2", "CASSAAF", "DPA1*01:03"),
+        ];
+        for i in 3..=20 {
+            records.push(record(&format!("S{i}"), "CASSXXF", ""));
+        }
+        let cluster = sspa_cluster();
+        let ctx = HlaContext::build(&records, 0.05);
+        let cluster_record = ClusterMembers::from_indices(&records, &cluster, &[0, 1]);
+
+        assert_eq!(hla_score(&cluster_record, &ctx), (1.0, Vec::new()));
     }
 }
