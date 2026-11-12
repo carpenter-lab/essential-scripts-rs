@@ -275,7 +275,7 @@ fn write_hla(path: &std::path::Path) {
 #[case::tcrdist_inferred(&["run-tcr-dist"][..])]
 #[case::tcrdist_beta_single(&["run-tcr-dist", "--distance-mode", "beta", "--cluster-method", "single-linkage"][..]
 )]
-#[case::tcrdist_graph(&["run-tcr-dist", "--distance-mode", "alpha-beta", "--cluster-method", "graph-components"][..]
+#[case::tcrdist_graph(&["run-tcr-dist", "--distance-mode", "alpha-beta", "--cluster-method", "connected-components"][..]
 )]
 fn clustering_cli_runs_offline(#[case] command: &[&str]) {
     let tmp = tempdir().unwrap();

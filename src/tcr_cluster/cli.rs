@@ -7,7 +7,9 @@ use std::path::PathBuf;
 /// Arguments shared by every clustering algorithm.
 #[derive(Args)]
 pub struct CommonArgs {
-    #[arg(help = "TSV containing subject:condition, TcRb, and optional TcRa/V/J/counts columns")]
+    #[arg(
+        help = "TSV containing subject:condition, TcRb, and optional TcRa, TRAV, TRAJ, TRBV, TRBJ, or counts columns"
+    )]
     pub chains_file: PathBuf,
 
     #[arg(help = "Output TSV file path; use '-' for stdout")]
