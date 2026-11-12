@@ -1,17 +1,12 @@
-#[cfg(feature = "base_cmd")]
 mod build_reports;
-#[cfg(feature = "base_cmd")]
 mod fastq;
-#[cfg(feature = "base_cmd")]
 mod md5;
-#[cfg(feature = "base_cmd")]
 mod traits;
 
 use crate::cores::{process_cores, thread_default, thread_parser};
 use crate::progress::ProgressArg;
 use anyhow::Result;
 use clap::{Args, Subcommand};
-#[cfg(feature = "base_cmd")]
 use fastq::*;
 use std::path::PathBuf;
 
@@ -59,7 +54,6 @@ pub enum Commands {
     },
 }
 
-#[cfg(feature = "base_cmd")]
 pub fn handle_command(cmd: &Commands) -> Result<()> {
     match cmd {
         Commands::GeoFastq {

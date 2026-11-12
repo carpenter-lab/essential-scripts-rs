@@ -19,7 +19,6 @@ pub fn process_cores_with_available(
     }
 }
 
-#[cfg(any(test, feature = "base_cmd"))]
 pub fn process_cores(requested_cores: Option<i32>) -> Result<usize, Error> {
     let cores = process_cores_with_available(num_cpu(), requested_cores)?;
     if cores == 0 {
@@ -47,30 +46,18 @@ fn num_cpu() -> usize {
     4
 }
 
-#[cfg(all(not(test), feature = "base_cmd"))]
+#[cfg(not(test))]
 fn num_cpu() -> usize {
     num_cpus::get()
 }
 
-#[cfg(feature = "base_cmd")]
 pub fn thread_parser() -> RangedI64ValueParser<i32> {
     clap::value_parser!(i32).range(1 + -(num_cpu() as i64)..=num_cpu() as i64)
 }
-#[cfg(feature = "base_cmd")]
 pub fn thread_default() -> i32 {
     num_cpu().try_into().unwrap()
 }
 
-#[cfg(not(feature = "base_cmd"))]
-pub fn thread_default() -> i32 {
-    0
-}
-#[cfg(not(feature = "base_cmd"))]
-pub fn thread_parser() -> RangedI64ValueParser<i32> {
-    clap::value_parser!(i32).range(-1..1)
-}
-
-#[cfg(feature = "base_cmd")]
 pub fn build_pool(cores: usize) -> anyhow::Result<rayon::ThreadPool> {
     rayon::ThreadPoolBuilder::new()
         .num_threads(cores)
@@ -136,12 +123,11 @@ mod tests {
         assert_eq!(thread_default(), 4);
     }
 
-    #[cfg(feature = "base_cmd")]
     #[rstest]
     #[case("1", 1)]
     #[case("4", 4)]
     #[case("-3", -3)]
-    fn test_thread_parser_accepts_valid_values_base_cmd(#[case] raw: &str, #[case] expected: i32) {
+    fn test_thread_parser_accepts_valid_values(#[case] raw: &str, #[case] expected: i32) {
         let parser = thread_parser();
         let value = parser
             .parse_ref(&clap::Command::new("test"), None, OsStr::new(raw))
@@ -149,39 +135,10 @@ mod tests {
         assert_eq!(value, expected);
     }
 
-    #[cfg(feature = "base_cmd")]
     #[rstest]
     #[case("-4")]
     #[case("5")]
-    fn test_thread_parser_rejects_invalid_values_base_cmd(#[case] raw: &str) {
-        let parser = thread_parser();
-        assert!(
-            parser
-                .parse_ref(&clap::Command::new("test"), None, OsStr::new(raw))
-                .is_err()
-        );
-    }
-
-    #[cfg(not(feature = "base_cmd"))]
-    #[rstest]
-    #[case("-1", -1)]
-    #[case("0", 0)]
-    fn test_thread_parser_accepts_valid_values_no_base_cmd(
-        #[case] raw: &str,
-        #[case] expected: i32,
-    ) {
-        let parser = thread_parser();
-        let value = parser
-            .parse_ref(&clap::Command::new("test"), None, OsStr::new(raw))
-            .expect("value should parse");
-        assert_eq!(value, expected);
-    }
-
-    #[cfg(not(feature = "base_cmd"))]
-    #[rstest]
-    #[case("-2")]
-    #[case("2")]
-    fn test_thread_parser_rejects_invalid_values_no_base_cmd(#[case] raw: &str) {
+    fn test_thread_parser_rejects_invalid_values(#[case] raw: &str) {
         let parser = thread_parser();
         assert!(
             parser

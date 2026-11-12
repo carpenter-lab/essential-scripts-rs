@@ -1,4 +1,3 @@
-#[cfg(feature = "base_cmd")]
 pub mod helper;
 use crate::cores::{thread_default, thread_parser};
 use clap::Subcommand;
@@ -40,7 +39,6 @@ pub enum Commands {
     },
 }
 
-#[cfg(feature = "base_cmd")]
 pub fn handle_command(cmd: Commands) -> anyhow::Result<()> {
     match cmd {
         Commands::TcrMatch {
@@ -57,7 +55,6 @@ pub fn handle_command(cmd: Commands) -> anyhow::Result<()> {
             let stdout = std::io::stdout();
             let mut handle = stdout.lock();
 
-            #[cfg(feature = "base_cmd")]
             helper::run_tcrmatch(
                 &input_file,
                 &database,

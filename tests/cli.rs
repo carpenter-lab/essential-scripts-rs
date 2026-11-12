@@ -197,7 +197,6 @@ fn copy_cellranger_outs_check_mode_runs() {
 
 /// Copies the trimmed immGLIPH reference fixtures into a fresh cache directory so
 /// the clustering commands run offline.
-#[cfg(feature = "base_cmd")]
 fn reference_cache() -> tempfile::TempDir {
     let cache = tempdir().unwrap();
     let fixtures =
@@ -210,7 +209,6 @@ fn reference_cache() -> tempfile::TempDir {
 
 /// Synthetic chains: three families of near-identical CDR3βs shared across subjects,
 /// plus unrelated singletons.
-#[cfg(feature = "base_cmd")]
 fn write_chains(path: &std::path::Path) {
     let families = [
         ("CASSLGQAYEQYF", "TRBV7-9", "CAVRDSNYQLIW", "TRAV12-2"),
@@ -249,7 +247,6 @@ fn write_chains(path: &std::path::Path) {
     fs::write(path, rows).unwrap();
 }
 
-#[cfg(feature = "base_cmd")]
 fn write_hla(path: &std::path::Path) {
     let mut rows = String::from(
         "PID\tHLA-DPA1(L)\tHLA-DPA1(R)\tHLA-DPB1(L)\tHLA-DPB1(R)\tHLA-DQA1(L)\tHLA-DQA1(R)\tHLA-DQB1(L)\tHLA-DQB1(R)\tHLA-DRB1(L)\tHLA-DRB1(R)\tHLA-DRB3/4/5(L)\tHLA-DRB3/4/5(R)\n",
@@ -267,7 +264,6 @@ fn write_hla(path: &std::path::Path) {
     fs::write(path, rows).unwrap();
 }
 
-#[cfg(feature = "base_cmd")]
 #[rstest]
 #[case::gliph2(&["run-gliph"][..])]
 #[case::gliph1(&["run-gliph", "--method", "gliph1"][..])]
@@ -325,7 +321,6 @@ fn clustering_cli_runs_offline(#[case] command: &[&str]) {
     );
 }
 
-#[cfg(feature = "base_cmd")]
 #[rstest]
 #[case::zero_sim_depth(&["--sim-depth", "0"][..])]
 #[case::bad_hla_threshold(&["--hla-threshold", "2"][..])]
@@ -344,7 +339,6 @@ fn clustering_cli_rejects_invalid_input(#[case] extra: &[&str]) {
         .failure();
 }
 
-#[cfg(feature = "base_cmd")]
 #[test]
 fn clustering_cli_rejects_out_of_range_neighbor_overlap() {
     cargo_bin_cmd!("essential-scripts-rs")

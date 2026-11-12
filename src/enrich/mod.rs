@@ -9,7 +9,6 @@ use anyhow::Result;
 use clap::{Error, Subcommand, ValueEnum};
 use std::fmt;
 use std::path::PathBuf;
-#[cfg(feature = "base_cmd")]
 use tokio;
 
 #[cfg(not(feature = "enrichment"))]
@@ -81,7 +80,6 @@ pub enum Commands {
     },
 }
 
-#[cfg(feature = "base_cmd")]
 #[tokio::main]
 pub async fn handle_command(cmd: Commands) -> Result<()> {
     #[cfg(feature = "enrichment")]

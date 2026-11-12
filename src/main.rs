@@ -50,7 +50,6 @@ enum Commands {
     TcrMatch(tcrmatch::Commands),
 }
 
-#[cfg(feature = "base_cmd")]
 pub(crate) fn main_helper(cli: Cli) {
     let result = match cli.command {
         Some(Commands::Aggregate(cmd)) => aggregate::handle_command(cmd),
@@ -81,15 +80,6 @@ pub(crate) fn main_helper(cli: Cli) {
             }
         }
     }
-}
-
-#[cfg(not(feature = "base_cmd"))]
-pub(crate) fn main_helper(_cli: Cli) {
-    println!(
-        "Please enable the `base_cmd` feature flag. \
-        This should be the default and using --no-default-features \
-        is meant only for document generation."
-    );
 }
 
 fn main() {

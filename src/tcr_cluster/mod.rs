@@ -13,29 +13,20 @@ mod model;
 pub mod scoring;
 pub mod stats;
 
-#[cfg(feature = "base_cmd")]
 mod gliph;
-#[cfg(feature = "base_cmd")]
 mod io;
-#[cfg(feature = "base_cmd")]
 mod motif;
-#[cfg(feature = "base_cmd")]
 mod pipeline;
-#[cfg(feature = "base_cmd")]
 mod tcrdist;
 
 pub use cli::Commands;
 pub use model::*;
 pub use pipeline::ClusterFinder;
 
-#[cfg(feature = "base_cmd")]
 use anyhow::{Context, Result};
-#[cfg(feature = "base_cmd")]
 use blosum::AminoAcidSubMatrix;
-#[cfg(feature = "base_cmd")]
 use cli::CommonArgs;
 
-#[cfg(feature = "base_cmd")]
 pub fn handle_command(command: Commands) -> Result<()> {
     match command {
         Commands::RunGliph { args } => {
@@ -77,7 +68,6 @@ pub fn handle_command(command: Commands) -> Result<()> {
     }
 }
 
-#[cfg(feature = "base_cmd")]
 fn run_command<F: ClusterFinder>(finder: &F, args: &CommonArgs) -> Result<()> {
     let cores = crate::cores::process_cores(Some(args.cores))?;
     args.validate()?;
@@ -96,12 +86,4 @@ fn run_command<F: ClusterFinder>(finder: &F, args: &CommonArgs) -> Result<()> {
     let pool = crate::cores::build_pool(cores)?;
     let rows = pool.install(|| pipeline::run(finder, &records, &reference, params))?;
     io::output::write_output(&args.output_file, &rows)
-}
-
-#[cfg(not(feature = "base_cmd"))]
-pub fn handle_command(_command: Commands) -> anyhow::Result<()> {
-    Err(anyhow::Error::new(clap::Error::raw(
-        clap::error::ErrorKind::MissingSubcommand,
-        "This command requires the `base_cmd` feature. Rebuild with `--features base_cmd`",
-    )))
 }

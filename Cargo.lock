@@ -1090,6 +1090,8 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "simd-adler32",
+ "smallvec",
  "temp_testdir",
  "tempfile",
  "thiserror",

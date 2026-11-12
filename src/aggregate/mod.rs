@@ -2,7 +2,6 @@ use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
 
-#[cfg(feature = "base_cmd")]
 mod core;
 
 #[derive(Subcommand)]
@@ -31,24 +30,18 @@ pub enum Commands {
     },
 }
 
-#[cfg(feature = "base_cmd")]
 pub fn handle_command(cmd: Commands) -> Result<()> {
     match cmd {
         Commands::AggregateCellRangerTCR {
             input_files,
             output_file,
             keep_alpha,
-        } =>
-        {
-            #[cfg(feature = "base_cmd")]
-            core::aggregate_cellranger_tcr_output(input_files, output_file, keep_alpha)?
-        }
+        } => core::aggregate_cellranger_tcr_output(input_files, output_file, keep_alpha)?,
     }
     Ok(())
 }
 
 #[cfg(test)]
-#[cfg(feature = "base_cmd")]
 mod tests {
     use super::*;
     use crate::test_helpers::{get_timestamp, write_text_file};

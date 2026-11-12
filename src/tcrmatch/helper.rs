@@ -661,7 +661,6 @@ pub fn run_tcrmatch<W: Write, T: GetData>(
         });
     }
 
-    #[cfg(feature = "base_cmd")]
     {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
@@ -671,13 +670,7 @@ pub fn run_tcrmatch<W: Write, T: GetData>(
             populate_peptide_affinities(&k1, &mut peplist2);
         });
     }
-    #[cfg(not(feature = "base_cmd"))]
-    {
-        populate_peptide_affinities(&k1, &mut peplist1);
-        populate_peptide_affinities(&k1, &mut peplist2);
-    }
 
-    #[cfg(feature = "base_cmd")]
     let tcrmatch_output = {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
@@ -693,15 +686,6 @@ pub fn run_tcrmatch<W: Write, T: GetData>(
             )
         })?
     };
-    #[cfg(not(feature = "base_cmd"))]
-    let tcrmatch_output = multi_calc_k3(
-        &k1,
-        &peplist1,
-        &peplist2,
-        threshold,
-        &iedb_map,
-        memory_limit,
-    )?;
 
     let was_trimmed = if trimming { "trimmed_" } else { "" };
     let tcrmatch_output_header = format!(
