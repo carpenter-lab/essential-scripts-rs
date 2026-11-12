@@ -202,7 +202,20 @@ pub fn read_chain_inputs(chains_path: &Path, hla_path: Option<&Path>) -> Result<
             subject,
             condition,
             beta,
-            alpha: cell(&row, alpha_index).map(str::to_ascii_uppercase),
+            alpha: {
+                let alpha = cell(&row, alpha_index).map(str::to_ascii_uppercase);
+                if let Some(value) = alpha.as_deref()
+                    && !value.is_empty()
+                    && !crate::tcr_cluster::blosum::is_amino_acid_sequence(value)
+                {
+                    bail!(
+                        "Invalid CDR3a amino-acid sequence on chain row {} in {}",
+                        row_index + 2,
+                        chains_path.display()
+                    );
+                }
+                alpha
+            },
             v_gene: gene(&row, v_index),
             j_gene: gene(&row, j_index),
             va_gene: gene(&row, va_index),
