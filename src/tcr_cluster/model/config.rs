@@ -161,7 +161,7 @@ impl DistanceParams {
     }
     /// The tcrdist cutoff for `edits` full CDR3 edits (a mismatch costing `max_mismatch`, or
     /// one gap residue), summed over the chains in the mode and weighted like the CDR3s.
-    /// Germline CDR differences count against the same budget.
+    /// Germline CDR differences count against the same budget and is shared by both chains.
     ///
     /// # Panics
     /// If the cutoff does not fit below 255 (the saturated "too far" distance).
