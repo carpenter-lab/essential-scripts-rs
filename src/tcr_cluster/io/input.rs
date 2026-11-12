@@ -18,7 +18,7 @@ fn cell(record: &StringRecord, index: Option<usize>) -> Option<&str> {
     index
         .and_then(|i| record.get(i))
         .map(str::trim)
-        .filter(|&s| !s.eq_ignore_ascii_case("NA") || !s.eq_ignore_ascii_case(""))
+        .filter(|&s| !s.is_empty() && !s.eq_ignore_ascii_case("NA"))
 }
 
 fn read_tsv(path: &Path) -> Result<csv::Reader<File>> {
