@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v5
+        id: release-please
         with:
           # this assumes that you have created a personal access token
           # (PAT) and configured it as a GitHub action secret named
@@ -38,4 +39,11 @@ jobs:
         run: cargo build --no-default-features
       - name: Build Docs
         if: ${{ steps.release-please.outputs.releases_created }}
-        run: cargo run --no-default-features -- --markdown-help
+        run: |
+          mkdir -p docs
+          cargo run -- --markdown-help
+      - name: Attach Docs to Release
+        if: ${{ steps.release-please.outputs.releases_created }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: gh release upload "${{ steps.release-please.outputs.tag_name }}" docs/cli.md --clobber
