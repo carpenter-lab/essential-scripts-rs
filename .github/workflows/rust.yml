@@ -45,14 +45,53 @@ jobs:
             libcairo2-dev \
             libfontconfig1-dev \
             libfreetype6-dev
-      - name: Build and Test
-        run: cargo llvm-cov nextest --lcov --output-path lcov.info --profile ci --all-features --all-targets --locked
-      - name: Upload test results to Codecov
+      # Both runs share one instrumented build: Cargo.toml keeps shared dependencies' features
+      # identical across feature sets, so the default run only recompiles this crate.
+      - name: Build and Test (all features)
+        run: |
+          status=0
+          cargo llvm-cov nextest --no-report --profile ci --all-features --all-targets --locked || status=$?
+          mv target/nextest/ci/junit.xml junit-all-features.xml || true
+          exit "$status"
+      - name: Build and Test (default features)
+        if: ${{ !cancelled() }}
+        run: |
+          status=0
+          cargo llvm-cov nextest --no-report --profile ci --all-targets --locked || status=$?
+          mv target/nextest/ci/junit.xml junit-default.xml || true
+          exit "$status"
+      - name: Merge coverage
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+      # Runs the binary left by the default-feature test build, so the docs keep the
+      # "Requires re-installing" notes. `cargo run` would rebuild: without dev-dependencies,
+      # shared crates resolve with different features.
+      - name: Generate CLI docs
+        env:
+          LLVM_PROFILE_FILE: /dev/null
+        run: |
+          mkdir -p docs
+          target/llvm-cov-target/debug/essential-scripts-rs --markdown-help
+      - name: Upload CLI docs
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-docs
+          path: docs/cli.md
+          if-no-files-found: error
+      - name: Upload test results to Codecov (all features)
         if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/nextest/ci/junit.xml
+          files: junit-all-features.xml
+          flags: all-features
+          report_type: test_results
+      - name: Upload test results to Codecov (default features)
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: junit-default.xml
+          flags: default-features
           report_type: test_results
       - name: Upload reports to Codecov
         uses: codecov/codecov-action@v6
