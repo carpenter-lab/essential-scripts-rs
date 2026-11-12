@@ -202,7 +202,7 @@ pub fn read_chain_inputs(chains_path: &Path, hla_path: Option<&Path>) -> Result<
             subject,
             condition,
             beta,
-            alpha: cell(&row, alpha_index).map(|s| s.to_owned()),
+            alpha: cell(&row, alpha_index).map(str::to_ascii_uppercase),
             v_gene: gene(&row, v_index),
             j_gene: gene(&row, j_index),
             va_gene: gene(&row, va_index),

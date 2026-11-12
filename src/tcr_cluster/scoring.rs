@@ -51,17 +51,12 @@ where
             counts[sampler.sample(&mut rng)] += 1;
         }
 
-        let mut raw_product = 1_u64;
-        let mut non_zero_categories = 0i32;
-
-        for &count in &counts {
-            if count > 0 {
-                raw_product *= count as u64;
-                non_zero_categories += 1;
-            }
-        }
-
-        let simulated_score = (raw_product as f64 / n_f64.powi(non_zero_categories)).round_dp(3);
+        let simulated_score = counts
+            .iter()
+            .filter(|&&count| count > 0)
+            .map(|&count| count as f64 / n_f64)
+            .product::<f64>()
+            .round_dp(3);
         let extreme = if gliph1 {
             simulated_score >= observed_score
         } else {

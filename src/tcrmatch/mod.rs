@@ -11,7 +11,7 @@ pub enum Commands {
         #[arg(help = "Input file to process")]
         input_file: PathBuf,
 
-        #[arg(short = 'd', long, default_value_t = helper::Database::Iedb)]
+        #[arg(short = 'd', long, value_enum, default_value_t = helper::Database::Iedb)]
         database: helper::Database,
 
         #[arg(
