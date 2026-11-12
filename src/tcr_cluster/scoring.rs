@@ -270,11 +270,13 @@ fn hla_score(records: &ClusterMembers, ctx: &HlaContext) -> (f64, Vec<(usize, St
             }
 
             if cluster_with > 1 {
+                // The two rows must be disjoint: compare the cluster against the subjects
+                // outside it, not against a population that still contains the cluster.
                 let cont_table = ContingencyTable2x2::from_reported_counts(
                     cluster_with,
                     draws,
-                    total_with,
-                    ctx.population_size,
+                    total_with - cluster_with,
+                    ctx.population_size - draws,
                 )
                 .expect("Failed to create contingency table HLA");
                 // let p_value = stats::hypergeometric_tail(
@@ -371,5 +373,32 @@ mod tests {
 
         assert!(score <= 0.05, "score {score}");
         assert!(hits.contains(&(0, "DPA1*01:03".to_owned())), "{hits:?}");
+    }
+
+    #[test]
+    fn hla_score_compares_cluster_against_remaining_subjects() {
+        // 10 subjects; the only two carriers of DPA1*01:03 form the cluster. Against the
+        // other 8 subjects the one-sided Fisher p is 1/45; counting the cluster in the
+        // reference too gave 6/66 and missed the default 0.05 threshold.
+        let mut records = vec![
+            record("S1", "CASSAAF", "DPA1*01:03"),
+            record("S2", "CASSAAF", "DPA1*01:03"),
+        ];
+        for i in 3..=10 {
+            records.push(record(&format!("S{i}"), "CASSXXF", "DPA1*02:01"));
+        }
+        let cluster = Cluster {
+            pattern: "SSAA".to_owned(),
+            kind: ClusterKind::Local,
+            fisher_score: 0.01,
+            member_sequences: vec!["CASSAAF".to_owned()],
+        };
+        let ctx = HlaContext::build(&records, 0.05);
+        let cluster_record = ClusterMembers::from_indices(&records, &cluster, &[0, 1]);
+
+        let (score, hits) = hla_score(&cluster_record, &ctx);
+
+        assert!((score - 1.0 / 45.0).abs() < 1e-12, "score {score}");
+        assert_eq!(hits, vec![(0, "DPA1*01:03".to_owned())]);
     }
 }
