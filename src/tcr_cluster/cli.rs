@@ -8,7 +8,7 @@ use std::path::PathBuf;
 #[derive(Args)]
 pub struct CommonArgs {
     #[arg(
-        help = "TSV containing subject:condition, TcRb, and optional TcRa, TRAV, TRAJ, TRBV, TRBJ, or counts columns"
+        help = "TSV containing subject:condition, CDR3b, and optional CDR3a, TRAV, TRAJ, TRBV, TRBJ, or count columns"
     )]
     pub chains_file: PathBuf,
 
@@ -87,7 +87,7 @@ pub enum Commands {
     /// `index`, `pattern`, `number_subject`, `number_unique_cdr3`, `TcRb`,
     /// `Fisher_score`, `Freq`, `subject`, `condition`, `final_score`, `hla_score`,
     /// `vb_score`, `expansion_score`, `length_score`, `cluster_size_score`, `type`,
-    /// `ulTcRb`, `V`, `J`, `TcRa`, and the eight HLA columns above. When the input has
+    /// `ulTcRb`, `VB`, `JB`, `TcRa`, and the eight HLA columns above. When the input has
     /// CDR3α sequences, a `pattern_alpha` column follows with the motif shared by each
     /// cluster's CDR3αs (found as for `run-tcr-dist`), then `VA` and `JA` when alpha genes
     /// are given.

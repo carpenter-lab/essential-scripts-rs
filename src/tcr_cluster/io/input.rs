@@ -18,7 +18,7 @@ fn cell(record: &StringRecord, index: Option<usize>) -> Option<&str> {
     index
         .and_then(|i| record.get(i))
         .map(str::trim)
-        .filter(|&s| !s.eq_ignore_ascii_case("NA"))
+        .filter(|&s| !s.eq_ignore_ascii_case("NA") || !s.eq_ignore_ascii_case(""))
 }
 
 fn read_tsv(path: &Path) -> Result<csv::Reader<File>> {
@@ -157,14 +157,14 @@ pub fn read_chain_inputs(chains_path: &Path, hla_path: Option<&Path>) -> Result<
         let beta = match cell(&row, Some(beta_index)) {
             Some(b) => b.to_ascii_uppercase(),
             None => bail!(
-                "Empty TcRb on chain row {} in {}",
+                "Empty CDR3β on row {} in {}",
                 row_index + 2,
                 chains_path.display()
             ),
         };
         if subject.is_empty() || condition.is_empty() {
             bail!(
-                "Empty subject or condition in 'subject:condition' on chain row {} in {}",
+                "Empty subject or condition in 'subject:condition' on row {} in {}",
                 row_index + 2,
                 chains_path.display()
             );
