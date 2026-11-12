@@ -1,3 +1,4 @@
+use crate::tcr_cluster::DistanceParams;
 use crate::tcr_cluster::blosum::{AminoAcidSubMatrix, Chain};
 use crate::tcr_cluster::model::{ChainRecord, Cluster, ClusterKind, HasCluster};
 use crate::tcr_cluster::motif::{
@@ -66,6 +67,7 @@ pub fn build_clusters_for_threshold(
     memberships: &[u32],
     records: &[ChainRecord],
     sub_matrix: &AminoAcidSubMatrix,
+    params: &DistanceParams,
     trim_flanks: bool,
     fisher_for: &(dyn Fn(&str) -> f64 + Sync),
     cluster_kind: &ClusterKind,
@@ -106,7 +108,16 @@ pub fn build_clusters_for_threshold(
 
             // Components with a single CDR3β are covered by `build_exact_beta_clusters`,
             // which groups every record sharing that CDR3β regardless of the graph.
-            if unique_betas.len() < 2 {
+            // We still want to cluster the CDR3αs of those records when `use_alpha`, but only if there are at least two.
+            let enough_alphas = || {
+                params.mode.uses_alpha()
+                    && member_indices
+                        .iter()
+                        .map(|&idx| records[idx].alpha.as_deref())
+                        .collect::<Option<BTreeSet<_>>>()
+                        .is_some_and(|alphas| alphas.len() >= 2)
+            };
+            if unique_betas.len() < 2 && !enough_alphas() {
                 pb.inc(1);
                 return None;
             }

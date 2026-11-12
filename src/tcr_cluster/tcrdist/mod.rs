@@ -328,6 +328,7 @@ impl ClusterFinder for TcrDist {
                     &memberships,
                     records,
                     &self.sub_matrix,
+                    &params,
                     true,
                     &fisher_for,
                     &ClusterKind::Global,
