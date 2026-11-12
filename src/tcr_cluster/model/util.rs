@@ -31,7 +31,7 @@ impl CumulativeSampler {
         *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
 
         if self.total <= 0.0 {
-            return (*state as usize) % len;
+            return bounded_index(*state, len);
         }
 
         let target = ((*state >> 11) as f64 / ((1_u64 << 53) as f64)) * self.total;
@@ -106,5 +106,46 @@ pub fn seeded_random(seed: &str) -> u64 {
 
 pub fn random_uniform_index(state: &mut u64, length: usize) -> usize {
     *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-    (*state as usize) % length.max(1)
+    bounded_index(*state, length.max(1))
+}
+
+/// Maps a full LCG state onto `[0, length)` using its high bits (Lemire's multiply-high).
+///
+/// The low `k` bits of a power-of-two-modulus LCG cycle with period `2^k`, so `state % length`
+/// makes consecutive draws nearly deterministic for small or even `length`.
+#[inline]
+fn bounded_index(state: u64, length: usize) -> usize {
+    ((u128::from(state) * length as u128) >> 64) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consecutive_uniform_draws_cover_all_pairs() {
+        // With the old low-bit `% 4`, consecutive draws just counted 0,1,2,3,… and only two
+        // of the six unordered pairs were ever produced.
+        let mut state = seeded_random("expansion:SSAA");
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..1000 {
+            let a = random_uniform_index(&mut state, 4);
+            let b = random_uniform_index(&mut state, 4);
+            if a != b {
+                seen.insert((a.min(b), a.max(b)));
+            }
+        }
+        assert_eq!(seen.len(), 6, "{seen:?}");
+    }
+
+    #[test]
+    fn uniform_index_stays_in_bounds() {
+        let mut state = seeded_random("bounds");
+        for length in [1, 2, 3, 7, 64, 1000] {
+            for _ in 0..1000 {
+                assert!(random_uniform_index(&mut state, length) < length);
+            }
+        }
+        assert_eq!(random_uniform_index(&mut state, 0), 0);
+    }
 }

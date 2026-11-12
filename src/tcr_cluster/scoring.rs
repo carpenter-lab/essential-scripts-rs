@@ -317,6 +317,26 @@ mod tests {
         assert_eq!(expansion_score(&members, &exp_ctx, 1000, "ties"), 1.0);
     }
 
+    #[test]
+    fn expansion_score_samples_background_uniformly() {
+        // Two of four sequences are expanded; drawing both by chance has probability 1/6.
+        // A low-bit LCG index never drew this pair and returned the 1/simulations floor.
+        let records: Vec<ChainRecord> = [1.0, 1.0, 100.0, 100.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, count)| ChainRecord {
+                beta: format!("CASS{i}EQYF"),
+                counts: Some(count),
+                ..Default::default()
+            })
+            .collect();
+        let exp_ctx = ExpansionContext::build(&records);
+        let members: HashSet<&str> = records[2..].iter().map(|r| r.beta.as_str()).collect();
+
+        let p = expansion_score(&members, &exp_ctx, 1000, "expansion:SSAA");
+        assert!((p - 1.0 / 6.0).abs() < 0.05, "p = {p}");
+    }
+
     fn record(subject: &str, beta: &str, dpa1: &str) -> ChainRecord {
         let mut hla: [String; 8] = Default::default();
         hla[0] = dpa1.to_owned();
