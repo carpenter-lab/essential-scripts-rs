@@ -353,6 +353,13 @@ pub(crate) fn fraction_self_greater(
         .flatten()
         .map(ToString::to_string)
         .collect();
+    let index: Vec<u32> = groups
+        .column("index")?
+        .as_series()
+        .context("could not get 'index' column")?
+        .u32()?
+        .into_no_null_iter()
+        .collect();
 
     let mut out_pattern: Vec<String> = Vec::with_capacity(height);
     let mut out_self_a: Vec<f64> = Vec::with_capacity(height);
@@ -377,6 +384,7 @@ pub(crate) fn fraction_self_greater(
 
     DataFrame::new_infer_height(vec![
         Series::new("pattern".into(), out_pattern).into(),
+        Series::new("index".into(), index).into(),
         Series::new("TcRa_alignment_score".into(), out_self_a).into(),
         Series::new("TcRb_alignment_score".into(), out_self_b).into(),
         Series::new("TcRa_alignment_score_v_background".into(), out_frac).into(),

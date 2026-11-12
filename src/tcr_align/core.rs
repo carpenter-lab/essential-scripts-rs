@@ -154,8 +154,8 @@ fn score_df(df: &DataFrame, replicates: usize) -> Result<DataFrame> {
     let res = df.run(replicates)?;
     df.join(
         &res,
-        ["pattern"],
-        ["pattern"],
+        ["pattern", "index"],
+        ["pattern", "index"],
         JoinArgs::new(JoinType::Right),
         None,
     )
