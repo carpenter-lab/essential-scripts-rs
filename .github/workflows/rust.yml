@@ -15,7 +15,74 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Fails fast with a readable message when Cargo.lock no longer matches Cargo.toml. This usually
+  # happens after merging main into a branch: git merges Cargo.lock line by line, which can leave
+  # dependency entries pointing at versions that no longer exist in the file.
+  lockfile:
+    name: Check Cargo.lock
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Check that Cargo.lock is up to date
+        run: |
+          if cargo metadata --locked --all-features --format-version=1 > /dev/null 2> lockfile-error.txt; then
+            echo "Cargo.lock is up to date."
+            exit 0
+          fi
+
+          # Let Cargo fix the lockfile so the job can show exactly what is out of date.
+          cargo metadata --all-features --format-version=1 > /dev/null
+          lock_diff=$(git diff --no-color -- Cargo.lock)
+
+          fix='cargo metadata --all-features --format-version=1 > /dev/null && git commit -m "chore: update Cargo.lock" Cargo.lock'
+          echo "::error file=Cargo.lock,title=Cargo.lock is out of date::Cargo.lock does not match Cargo.toml, so every cargo command run with --locked will fail. This usually happens after merging main into this branch. To fix it, run this locally and push: $fix"
+
+          {
+            echo "## ❌ Cargo.lock is out of date"
+            echo
+            echo "\`Cargo.lock\` does not match \`Cargo.toml\`, so the build and test steps (which use \`--locked\`) cannot run."
+            echo
+            echo "This usually happens after merging \`main\` into a branch. Git merges \`Cargo.lock\` line by line without running Cargo, which can leave dependency entries pointing at versions that no longer exist in the file."
+            echo
+            echo "### How to fix"
+            echo
+            echo "Run this on your branch, then push:"
+            echo
+            echo '```bash'
+            echo "$fix"
+            echo '```'
+            echo
+            echo "### What Cargo would change"
+            echo
+            echo '```diff'
+            echo "$lock_diff"
+            echo '```'
+            echo
+            echo "<details><summary>Original Cargo error</summary>"
+            echo
+            echo '```'
+            cat lockfile-error.txt
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo
+          echo "=================================================================="
+          echo " Cargo.lock is out of date with Cargo.toml."
+          echo
+          echo " Fix it by running this on your branch and pushing:"
+          echo
+          echo "   $fix"
+          echo
+          echo " What Cargo would change:"
+          echo "=================================================================="
+          echo "$lock_diff"
+          exit 1
+
   build:
+    needs: lockfile
 
     runs-on: ubuntu-latest
 
