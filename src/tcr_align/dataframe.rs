@@ -174,7 +174,8 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> Result<DataFrame>
                 .context("could not create selector for TcRa")?,
         )
         .rename(["TcRa_list"], ["TcRa"], true)
-        .filter(col("TcRa").is_not_null())
+        // Null TcRa entries are kept: they are skipped when the list cells are read, and
+        // filtering them out here would drop whole groups (and their TcRb sequences).
         // TcRb -> explode
         .with_columns([col("TcRb").str().split(lit(";")).alias("TcRb_list")])
         .explode(
@@ -350,8 +351,8 @@ pub(crate) fn fraction_self_greater(
         .context("could not get 'pattern' column")?
         .str()?
         .iter()
-        .flatten()
-        .map(ToString::to_string)
+        // Keep one entry per row (null -> "") so patterns stay aligned with group rows.
+        .map(|p| p.unwrap_or_default().to_string())
         .collect();
     // Carried through unchanged (one output row per group, in order) so it keeps the input's
     // dtype, usually i64 from CSV parsing, and still matches when joined back onto the input.
@@ -567,6 +568,7 @@ fn calculate_scores(
         match get_list_cell_as_vec_utf8(groups, "TcRa", i) {
             Err(_) => {
                 out_self_a.push(f64::NAN);
+                out_frac.push(f64::NAN);
             }
             Ok(a_full) => {
                 let a_res = calculate_single_chain_score(&mut ctx, a_full);

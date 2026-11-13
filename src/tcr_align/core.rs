@@ -108,7 +108,8 @@ impl Run for DataFrame {
 }
 
 /// Scores a given `DataFrame` by running a specified number of replicates and
-/// performs a right join between the original `DataFrame` and the resulting `DataFrame`.
+/// performs a left join from the original `DataFrame` onto the resulting `DataFrame`,
+/// so every input row is kept even if it has no scores.
 ///
 /// # Arguments
 ///
@@ -147,16 +148,15 @@ impl Run for DataFrame {
 ///
 /// # Notes
 ///
-/// - The join operation is performed on the `pattern` column from both the original
-///   and resulting `DataFrame` using a `Right Join`.
-/// - The `JoinArgs::new(JoinType::Right)` specifies the type of join to be used.
+/// - The join is a left join on the `pattern` and `index` columns, so every input row
+///   is kept, including rows whose group could not be scored.
 fn score_df(df: &DataFrame, replicates: usize) -> Result<DataFrame> {
     let res = df.run(replicates)?;
     df.join(
         &res,
         ["pattern", "index"],
         ["pattern", "index"],
-        JoinArgs::new(JoinType::Right),
+        JoinArgs::new(JoinType::Left),
         None,
     )
     .map_err(|e| anyhow::anyhow!("Failed to join DataFrame with scored results: {:?}", e))
@@ -238,6 +238,43 @@ mod tests {
         assert!(cols.contains("TcRa_alignment_score"));
         assert!(cols.contains("TcRb_alignment_score"));
         assert!(cols.contains("TcRa_alignment_score_v_background"));
+    }
+
+    #[test]
+    fn score_df_keeps_rows_with_missing_alpha() {
+        let df = df![
+            "pattern" => ["p1", "p1", "p2", "single"],
+            "TcRa" => [Some("CAVA;CAVB"), None, None, Some("CAVC")],
+            "TcRb" => [Some("CASA;CASB"), Some("CASC"), Some("CASD;CASE"), Some("CASF")],
+            "index" => [1i64, 1, 2, 3],
+        ]
+        .unwrap();
+
+        let scored = score_df(&df, 1).unwrap();
+        assert_eq!(scored.height(), df.height(), "{scored:?}");
+
+        // A group with no alpha sequences still gets a beta score.
+        let p2 = scored
+            .clone()
+            .lazy()
+            .filter(col("pattern").eq(lit("p2")))
+            .collect()
+            .unwrap();
+        assert_eq!(p2.height(), 1);
+        let b = p2
+            .column("TcRb_alignment_score")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(0);
+        let a = p2
+            .column("TcRa_alignment_score")
+            .unwrap()
+            .f64()
+            .unwrap()
+            .get(0);
+        assert!(b.is_some_and(|v| !v.is_nan()), "{p2:?}");
+        assert!(a.is_some_and(f64::is_nan), "{p2:?}");
     }
 
     #[test]
