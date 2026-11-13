@@ -15,7 +15,74 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Fails fast with a readable message when Cargo.lock no longer matches Cargo.toml. This usually
+  # happens after merging main into a branch: git merges Cargo.lock line by line, which can leave
+  # dependency entries pointing at versions that no longer exist in the file.
+  lockfile:
+    name: Check Cargo.lock
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Check that Cargo.lock is up to date
+        run: |
+          if cargo metadata --locked --all-features --format-version=1 > /dev/null 2> lockfile-error.txt; then
+            echo "Cargo.lock is up to date."
+            exit 0
+          fi
+
+          # Let Cargo fix the lockfile so the job can show exactly what is out of date.
+          cargo metadata --all-features --format-version=1 > /dev/null
+          lock_diff=$(git diff --no-color -- Cargo.lock)
+
+          fix='cargo metadata --all-features --format-version=1 > /dev/null && git commit -m "chore: update Cargo.lock" Cargo.lock'
+          echo "::error file=Cargo.lock,title=Cargo.lock is out of date::Cargo.lock does not match Cargo.toml, so every cargo command run with --locked will fail. This usually happens after merging main into this branch. To fix it, run this locally and push: $fix"
+
+          {
+            echo "## ❌ Cargo.lock is out of date"
+            echo
+            echo "\`Cargo.lock\` does not match \`Cargo.toml\`, so the build and test steps (which use \`--locked\`) cannot run."
+            echo
+            echo "This usually happens after merging \`main\` into a branch. Git merges \`Cargo.lock\` line by line without running Cargo, which can leave dependency entries pointing at versions that no longer exist in the file."
+            echo
+            echo "### How to fix"
+            echo
+            echo "Run this on your branch, then push:"
+            echo
+            echo '```bash'
+            echo "$fix"
+            echo '```'
+            echo
+            echo "### What Cargo would change"
+            echo
+            echo '```diff'
+            echo "$lock_diff"
+            echo '```'
+            echo
+            echo "<details><summary>Original Cargo error</summary>"
+            echo
+            echo '```'
+            cat lockfile-error.txt
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo
+          echo "=================================================================="
+          echo " Cargo.lock is out of date with Cargo.toml."
+          echo
+          echo " Fix it by running this on your branch and pushing:"
+          echo
+          echo "   $fix"
+          echo
+          echo " What Cargo would change:"
+          echo "=================================================================="
+          echo "$lock_diff"
+          exit 1
+
   build:
+    needs: lockfile
 
     runs-on: ubuntu-latest
 
@@ -46,14 +113,53 @@ jobs:
             libcairo2-dev \
             libfontconfig1-dev \
             libfreetype6-dev
-      - name: Build and Test
-        run: cargo llvm-cov nextest --lcov --output-path lcov.info --profile ci --all-features --all-targets --locked
-      - name: Upload test results to Codecov
+      # Both runs share one instrumented build: Cargo.toml keeps shared dependencies' features
+      # identical across feature sets, so the default run only recompiles this crate.
+      - name: Build and Test (all features)
+        run: |
+          status=0
+          cargo llvm-cov nextest --no-report --profile ci --all-features --all-targets --locked || status=$?
+          mv target/nextest/ci/junit.xml junit-all-features.xml || true
+          exit "$status"
+      - name: Build and Test (default features)
+        if: ${{ !cancelled() }}
+        run: |
+          status=0
+          cargo llvm-cov nextest --no-report --profile ci --all-targets --locked || status=$?
+          mv target/nextest/ci/junit.xml junit-default.xml || true
+          exit "$status"
+      - name: Merge coverage
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+      # Runs the binary left by the default-feature test build, so the docs keep the
+      # "Requires re-installing" notes. `cargo run` would rebuild: without dev-dependencies,
+      # shared crates resolve with different features.
+      - name: Generate CLI docs
+        env:
+          LLVM_PROFILE_FILE: /dev/null
+        run: |
+          mkdir -p docs
+          target/llvm-cov-target/debug/essential-scripts-rs --markdown-help
+      - name: Upload CLI docs
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-docs
+          path: docs/cli.md
+          if-no-files-found: error
+      - name: Upload test results to Codecov (all features)
         if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/nextest/ci/junit.xml
+          files: junit-all-features.xml
+          flags: all-features
+          report_type: test_results
+      - name: Upload test results to Codecov (default features)
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: junit-default.xml
+          flags: default-features
           report_type: test_results
       - name: Upload reports to Codecov
         uses: codecov/codecov-action@v6

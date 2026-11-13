@@ -1,5 +1,6 @@
 use parasail_rs::aligner::Aligner;
 use parasail_rs::matrix::Matrix;
+use parasail_rs::profile::Profile;
 use polars::error::{PolarsError, PolarsResult};
 use std::sync::OnceLock;
 
@@ -81,6 +82,7 @@ pub fn build_protein_aligner(gap_open: i32, gap_extend: i32) -> PolarsResult<Ali
         .matrix(matrix)
         .gap_open(gap_open)
         .gap_extend(gap_extend)
+        .solution_width(16)
         .build())
 }
 
@@ -151,22 +153,14 @@ pub fn run_parasail<S: AsRef<str>>(
 
     if let Some(b) = reference {
         for query_seq in a {
-            let q_bytes = query_seq.as_ref().as_bytes();
-            for ref_seq in b {
-                let result = run_parsail_inner(aligner, q_bytes, ref_seq)?;
-                sum += result;
-                n += 1;
-            }
+            sum += sum_scores_for_query(aligner, query_seq.as_ref().as_bytes(), b)?;
+            n += b.len() as i64;
         }
     } else {
-        let n_a = a.len();
-        for i in 0..n_a {
-            let q_bytes = a[i].as_ref().as_bytes();
-            for item in a.iter().take(n_a).skip(i + 1) {
-                let result = run_parsail_inner(aligner, q_bytes, item)?;
-                sum += result;
-                n += 1;
-            }
+        for (i, query_seq) in a.iter().enumerate() {
+            let rest = &a[i + 1..];
+            sum += sum_scores_for_query(aligner, query_seq.as_ref().as_bytes(), rest)?;
+            n += rest.len() as i64;
         }
     }
 
@@ -177,16 +171,49 @@ pub fn run_parasail<S: AsRef<str>>(
     })
 }
 
-fn run_parsail_inner<S: AsRef<str>>(
+/// Minimum number of references a query must be aligned against before a query
+/// profile is built for it. Building a profile (and the profile-specific aligner)
+/// has a fixed cost, so for very short rows the plain per-call alignment is cheaper.
+const MIN_REFS_FOR_PROFILE: usize = 8;
+
+/// Sums the global alignment scores of `query` against every sequence in `refs`.
+///
+/// When there are enough references, the query's SIMD profile is built once and
+/// reused for every alignment instead of being rebuilt on each `align` call.
+/// The profiled aligner is always global, matching `build_protein_aligner`.
+fn sum_scores_for_query<S: AsRef<str>>(
     aligner: &Aligner,
-    query_bytes: &[u8],
-    item: &S,
-) -> Result<i64, PolarsError> {
-    let r_bytes = item.as_ref().as_bytes();
-    let result = aligner
-        .align(Some(query_bytes), r_bytes)
-        .map_err(|e| PolarsError::ComputeError(format!("parasail align failed: {e}").into()))?;
-    Ok(i64::from(result.get_score()))
+    query: &[u8],
+    refs: &[S],
+) -> PolarsResult<i64> {
+    let map_err = |e: parasail_rs::error::Error| {
+        PolarsError::ComputeError(format!("parasail align failed: {e}").into())
+    };
+
+    let mut sum: i64 = 0;
+    if refs.len() >= MIN_REFS_FOR_PROFILE {
+        let profile = Profile::new(query, false, &aligner.matrix).map_err(map_err)?;
+        let profiled = Aligner::new()
+            .global()
+            .gap_open(aligner.gap_open)
+            .gap_extend(aligner.gap_extend)
+            .profile(profile)
+            .build();
+        for r in refs {
+            let result = profiled
+                .align(None, r.as_ref().as_bytes())
+                .map_err(map_err)?;
+            sum += i64::from(result.get_score());
+        }
+    } else {
+        for r in refs {
+            let result = aligner
+                .align(Some(query), r.as_ref().as_bytes())
+                .map_err(map_err)?;
+            sum += i64::from(result.get_score());
+        }
+    }
+    Ok(sum)
 }
 
 #[cfg(test)]
@@ -269,6 +296,23 @@ mod tests {
         Some(vec!["ACD", "WQ", "MN"])
     )]
     #[case::within_query_only(vec!["ACD", "WQ", "MN"], None)]
+    // Enough sequences per row to exercise the query-profile path.
+    #[case::profile_within_query(
+        vec![
+            "CASSLGQAYEQYF", "CASSPGTGNTEAFF", "CAWSVGQGYEQYF", "CASSLEGNQPQHF",
+            "CASRPGLAGGRPEQYF", "CASSQDRGNYGYTF", "CSARDRTGNGYTF", "CASSIRSSYEQYF",
+            "CASSYSGGSYNEQFF", "CASSLAPGATNEKLFF", "CAVRDSNYQLIW",
+        ],
+        None
+    )]
+    #[case::profile_with_reference(
+        vec!["CASSLGQAYEQYF", "CAVRDSNYQLIW"],
+        Some(vec![
+            "CASSPGTGNTEAFF", "CAWSVGQGYEQYF", "CASSLEGNQPQHF", "CASRPGLAGGRPEQYF",
+            "CASSQDRGNYGYTF", "CSARDRTGNGYTF", "CASSIRSSYEQYF", "CASSYSGGSYNEQFF",
+            "CASSLAPGATNEKLFF",
+        ])
+    )]
     fn mean_matches_manual_calculation(
         #[from(protein_aligner)] aligner: Aligner,
         #[case] query: Vec<&str>,

@@ -1,0 +1,38 @@
+name: release-docs
+
+# Attach the CLI docs built by the Rust workflow to the release for that commit.
+# release-please tags the release commit within seconds of the push, long before the
+# Rust workflow finishes, so the tag exists by the time this runs.
+on:
+  workflow_run:
+    workflows: [ "Rust" ]
+    types: [ completed ]
+    branches: [ "main" ]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  attach-docs:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: Find release tag for this commit
+        id: tag
+        run: |
+          tag=$(gh api --paginate "repos/$REPO/tags" \
+            --jq '.[] | select(.commit.sha == env.SHA and (.name | startswith("v"))) | .name' | head -n 1)
+          echo "Release tag: ${tag:-none}"
+          echo "name=$tag" >> "$GITHUB_OUTPUT"
+      - name: Download CLI docs
+        if: ${{ steps.tag.outputs.name != '' }}
+        run: gh run download "$RUN_ID" --repo "$REPO" --name cli-docs --dir docs
+      - name: Attach CLI docs to release
+        if: ${{ steps.tag.outputs.name != '' }}
+        run: gh release upload "${{ steps.tag.outputs.name }}" docs/cli.md --repo "$REPO" --clobber

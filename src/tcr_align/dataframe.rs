@@ -1,4 +1,4 @@
-use crate::progress::{Progress, dual_progress_bars};
+use crate::progress::{Progress, ProgressSettings, dual_progress_bars};
 use crate::tcr_align::align::{build_protein_aligner, run_parasail};
 use anyhow::{Context, Result};
 use indicatif::ProgressBar;
@@ -155,7 +155,7 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> Result<DataFrame>
     let lf = all_data
         .clone()
         .lazy()
-        .select([col("pattern"), col("TcRa"), col("TcRb")])
+        .select([col("pattern"), col("TcRa"), col("TcRb"), col("index")])
         .unique(None, UniqueKeepStrategy::First)
         // TcRa -> explode
         .with_columns([col("TcRa").str().split(lit(";")).alias("TcRa_list")])
@@ -174,7 +174,8 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> Result<DataFrame>
                 .context("could not create selector for TcRa")?,
         )
         .rename(["TcRa_list"], ["TcRa"], true)
-        .filter(col("TcRa").is_not_null())
+        // Null TcRa entries are kept: they are skipped when the list cells are read, and
+        // filtering them out here would drop whole groups (and their TcRb sequences).
         // TcRb -> explode
         .with_columns([col("TcRb").str().split(lit(";")).alias("TcRb_list")])
         .explode(
@@ -197,7 +198,7 @@ pub(crate) fn prepare_parasail_groups(all_data: &DataFrame) -> Result<DataFrame>
 
     // group and collect into list columns
     let grouped = lf
-        .group_by([col("pattern")])
+        .group_by([col("pattern"), col("index")])
         .agg([
             len().alias("n"),
             col("TcRa").unique().alias("TcRa"), // list
@@ -350,9 +351,12 @@ pub(crate) fn fraction_self_greater(
         .context("could not get 'pattern' column")?
         .str()?
         .iter()
-        .flatten()
-        .map(ToString::to_string)
+        // Keep one entry per row (null -> "") so patterns stay aligned with group rows.
+        .map(|p| p.unwrap_or_default().to_string())
         .collect();
+    // Carried through unchanged (one output row per group, in order) so it keeps the input's
+    // dtype, usually i64 from CSV parsing, and still matches when joined back onto the input.
+    let index = groups.column("index")?.clone();
 
     let mut out_pattern: Vec<String> = Vec::with_capacity(height);
     let mut out_self_a: Vec<f64> = Vec::with_capacity(height);
@@ -373,10 +377,11 @@ pub(crate) fn fraction_self_greater(
         &mut out_self_b,
         &mut out_frac,
         &mut rng,
-    );
+    )?;
 
     DataFrame::new_infer_height(vec![
         Series::new("pattern".into(), out_pattern).into(),
+        index,
         Series::new("TcRa_alignment_score".into(), out_self_a).into(),
         Series::new("TcRb_alignment_score".into(), out_self_b).into(),
         Series::new("TcRa_alignment_score_v_background".into(), out_frac).into(),
@@ -518,21 +523,21 @@ fn calculate_scores(
     out_self_b: &mut Vec<f64>,
     out_frac: &mut Vec<f64>,
     rng: &mut SmallRng,
-) {
+) -> Result<()> {
     let height = groups.height();
-    let (pb, inner_pb) = dual_progress_bars(n_replicates as u64, height as u64, Progress::Progress)
-        .expect("Failed to create dual progress bars in `calculate_scores`");
+    let (pb, inner_pb) = dual_progress_bars(
+        height as u64,
+        Some(n_replicates as u64),
+        ProgressSettings::Position,
+        ProgressSettings::Position,
+        Progress::Progress,
+    )
+    .context("Failed to create dual progress bars in `calculate_scores`")?;
 
-    let aligner = match build_protein_aligner(gap_open, gap_extend) {
-        Ok(aligner) => aligner,
-        Err(e) => {
-            eprintln!("Error building protein aligner: {e}");
-            return;
-        }
-    };
-
+    let aligner =
+        build_protein_aligner(gap_open, gap_extend).context("Failed to build protein aligner")?;
+    pb.set_message("Calculating scores");
     for i in 0..height {
-        inner_pb.set_message(format!("{:width$}", "", width = 33));
         let pattern = patterns.get(i).map_or("", |v| v);
         if pattern == "single" {
             pb.inc(1);
@@ -542,11 +547,7 @@ fn calculate_scores(
             out_frac.push(f64::NAN);
             continue;
         }
-        pb.set_message(format!(
-            "Calculating scores for {:width$}",
-            pattern,
-            width = 10
-        ));
+        inner_pb.set_message(pattern.to_string());
         let mut ctx = ScoreContext {
             rng,
             pb: &inner_pb,
@@ -567,6 +568,7 @@ fn calculate_scores(
         match get_list_cell_as_vec_utf8(groups, "TcRa", i) {
             Err(_) => {
                 out_self_a.push(f64::NAN);
+                out_frac.push(f64::NAN);
             }
             Ok(a_full) => {
                 let a_res = calculate_single_chain_score(&mut ctx, a_full);
@@ -585,6 +587,7 @@ fn calculate_scores(
         out_pattern.push(pattern.to_string());
         pb.inc(1);
     }
+    Ok(())
 }
 
 struct SingleChainResult {
@@ -630,7 +633,10 @@ fn calculate_single_chain_background_score(
     let mut greater_count = 0usize;
     if group_result.n_seqs > 1 && n_val > 0 && !group_result.is_nan() {
         for _rep in 0..n_replicates {
-            let background: Vec<String> = unique_seqs.sample(ctx.rng, n_val).cloned().collect();
+            let background: Vec<&str> = unique_seqs
+                .sample(ctx.rng, n_val)
+                .map(String::as_str)
+                .collect();
 
             let bg_mean = run_parasail(ctx.aligner, &background, None).unwrap_or_else(|e| {
                 eprintln!("Error running parasail for pattern {}: {e}", ctx.pattern);
@@ -698,6 +704,7 @@ mod tests {
             "pattern" => ["pat1", "pat1", "pat2"],
             "TcRa" => [Some("A;A"), Some("B"), Some("C;D")],
             "TcRb" => [Some("X"), Some("Y;Z"), None::<&str>],
+            "index" => [1i64, 1, 2],
         ]
         .unwrap();
 
@@ -748,6 +755,7 @@ mod tests {
             "pattern" => ["pat1", "pat1"],
             "TcRa" => [Some(" A ;A; ;A "), Some("A")],
             "TcRb" => [Some("X"), Some("X")],
+            "index" => [1i64, 1],
         ]
         .unwrap();
 
@@ -762,6 +770,7 @@ mod tests {
             "pattern" => ["single", "pat2"],
             "TcRa" => [Some("ACD;WQ"), Some("ACD;MN")],
             "TcRb" => [Some("MN;PQ"), Some("PQ;RS")],
+            "index" => [1i64, 2],
         ]
         .unwrap();
 
@@ -785,6 +794,7 @@ mod tests {
             "pattern" => ["pat1", "pat2"],
             "TcRa" => [Some("ACD"), Some("WQ;MN")],
             "TcRb" => [Some("MN;PQ"), Some("PQ;RS")],
+            "index" => [1i64, 2],
         ]
         .unwrap();
 
