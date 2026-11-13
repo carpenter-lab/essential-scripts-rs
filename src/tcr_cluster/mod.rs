@@ -63,7 +63,7 @@ pub fn handle_command(command: Commands) -> Result<()> {
                 cluster_method: tcrdist.cluster_method,
                 min_neighbor_overlap: tcrdist.min_neighbor_overlap,
             };
-            run_command(&finder, &args).context("tcrdist analysis failed")
+            run_command(&finder, &args)
         }
     }
 }

@@ -1,9 +1,48 @@
+use crate::tcr_cluster::blosum::is_amino_acid_sequence;
 use crate::tcr_cluster::model::*;
 use anyhow::{Context, Result, bail};
 use csv::{ReaderBuilder, StringRecord};
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
+
+/// How many invalid CDR3s to name in the warning before summarising the rest as a count.
+const MAX_INVALID_EXAMPLES: usize = 5;
+
+/// Invalid CDR3s seen while reading the input, kept for a single summary warning.
+#[derive(Default)]
+struct InvalidCdr3s {
+    count: usize,
+    examples: Vec<String>,
+}
+
+impl InvalidCdr3s {
+    fn record(&mut self, row_index: usize, sequence: &str) {
+        self.count += 1;
+        if self.examples.len() < MAX_INVALID_EXAMPLES {
+            self.examples
+                .push(format!("row {} '{sequence}'", row_index + 2));
+        }
+    }
+
+    fn warn(&self, chain: &str, consequence: &str, path: &Path) {
+        if self.count == 0 {
+            return;
+        }
+        let more = self.count - self.examples.len();
+        let more = if more > 0 {
+            format!(", and {more} more")
+        } else {
+            String::new()
+        };
+        eprintln!(
+            "Warning: {} {chain} sequences in {} contain non-amino-acid characters; their {consequence} ({}{more})",
+            self.count,
+            path.display(),
+            self.examples.join(", "),
+        );
+    }
+}
 
 fn header_index(headers: &StringRecord, name: &str) -> Option<usize> {
     headers.iter().position(|header| header == name)
@@ -130,6 +169,8 @@ pub fn read_chain_inputs(chains_path: &Path, hla_path: Option<&Path>) -> Result<
     };
     let counts_index = header_index(&headers, "count");
     let mut chains = Vec::new();
+    let mut invalid_beta = InvalidCdr3s::default();
+    let mut invalid_alpha = InvalidCdr3s::default();
 
     for (row_index, row) in reader.records().enumerate() {
         let row = row.with_context(|| {
@@ -169,6 +210,21 @@ pub fn read_chain_inputs(chains_path: &Path, hla_path: Option<&Path>) -> Result<
                 chains_path.display()
             );
         }
+        if !is_amino_acid_sequence(&beta) {
+            invalid_beta.record(row_index, &beta);
+            continue;
+        }
+        // An unusable CDR3α only costs the record its alpha chain: beta-only analyses still use
+        // it, and modes that need alpha drop records without one later.
+        let alpha = cell(&row, alpha_index)
+            .map(str::to_ascii_uppercase)
+            .filter(|alpha| {
+                let valid = is_amino_acid_sequence(alpha);
+                if !valid {
+                    invalid_alpha.record(row_index, alpha);
+                }
+                valid
+            });
         let hla = hla_by_subject
             .as_ref()
             .and_then(|hla_by_subject| hla_by_subject.get(&subject));
@@ -202,20 +258,7 @@ pub fn read_chain_inputs(chains_path: &Path, hla_path: Option<&Path>) -> Result<
             subject,
             condition,
             beta,
-            alpha: {
-                let alpha = cell(&row, alpha_index).map(str::to_ascii_uppercase);
-                if let Some(value) = alpha.as_deref()
-                    && !value.is_empty()
-                    && !crate::tcr_cluster::blosum::is_amino_acid_sequence(value)
-                {
-                    bail!(
-                        "Invalid CDR3a amino-acid sequence on chain row {} in {}",
-                        row_index + 2,
-                        chains_path.display()
-                    );
-                }
-                alpha
-            },
+            alpha,
             v_gene: gene(&row, v_index),
             j_gene: gene(&row, j_index),
             va_gene: gene(&row, va_index),
@@ -225,6 +268,12 @@ pub fn read_chain_inputs(chains_path: &Path, hla_path: Option<&Path>) -> Result<
         });
     }
 
+    invalid_beta.warn("CDR3β", "records will be ignored", chains_path);
+    invalid_alpha.warn(
+        "CDR3α",
+        "alpha chains will be ignored (the records are kept for beta-only analysis)",
+        chains_path,
+    );
     if chains.is_empty() {
         bail!("No CDR3 chain records found in {}", chains_path.display());
     }
@@ -332,6 +381,42 @@ mod tests {
         let temp = tempdir().unwrap();
         let chains = temp.path().join("chains.tsv");
         fs::write(&chains, "subject:condition\tCDR3b\nS1\tCASSIRSSYEQYF\n").unwrap();
+
+        assert!(read_chain_inputs(&chains, None).is_err());
+    }
+
+    #[test]
+    fn skips_invalid_beta_records_and_clears_invalid_alpha() {
+        let temp = tempdir().unwrap();
+        let chains = temp.path().join("chains.tsv");
+        fs::write(
+            &chains,
+            "subject:condition\tCDR3b\tCDR3a\n\
+             S1:case\tCASSIRSSYEQYF\tCAVRDSNYQLIW\n\
+             S2:case\tCASS*RSSYEQYF\tCAVRDSNYQLIW\n\
+             S3:case\tCASSPRSSYEQYF\tCAV_RDSNYQLIW\n\
+             S4:case\tCASSLRSSYEQYF\tNA\n",
+        )
+        .unwrap();
+
+        let records = read_chain_inputs(&chains, None).unwrap();
+
+        let subjects: Vec<_> = records.iter().map(|r| r.subject.as_str()).collect();
+        assert_eq!(subjects, ["S1", "S3", "S4"]);
+        assert_eq!(records[0].alpha.as_deref(), Some("CAVRDSNYQLIW"));
+        assert_eq!(records[1].beta, "CASSPRSSYEQYF");
+        assert!(!records[1].has_alpha_cdr3());
+    }
+
+    #[test]
+    fn errors_when_every_cdr3_is_invalid() {
+        let temp = tempdir().unwrap();
+        let chains = temp.path().join("chains.tsv");
+        fs::write(
+            &chains,
+            "subject:condition\tCDR3b\nS1:case\tCASS*RSSYEQYF\n",
+        )
+        .unwrap();
 
         assert!(read_chain_inputs(&chains, None).is_err());
     }
