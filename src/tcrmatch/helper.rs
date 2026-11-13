@@ -409,7 +409,8 @@ pub fn multi_calc_k3(
     let mut tcrmatch_output = Vec::new();
 
     for tuple in unique_vec {
-        let match_peptide = tuple.seq1;
+        // Annotations belong to the database sequence (seq2), not the input (seq1).
+        let match_peptide = tuple.seq2;
         if let Some(match_row_vec) = iedb_map.get(match_peptide) {
             for match_row in match_row_vec {
                 let output_string = format!(
@@ -775,6 +776,44 @@ mod tests {
             "Self score should be 1.0, got {}",
             score
         );
+    }
+
+    #[test]
+    fn test_multi_calc_k3_joins_on_database_sequence() {
+        let k1 = fmatrix_k1();
+        let pep = |s: &str| Peptide {
+            seq: s.to_string(),
+            len: s.len(),
+            aff: -99.9,
+            indices: Vec::new(),
+        };
+        // The input sequence is not in the database, so annotations must come
+        // from the matched database sequence.
+        let mut input = vec![pep("ASSLGQ")];
+        let mut db = vec![pep("ASSLGE")];
+        populate_peptide_affinities(&k1, &mut input);
+        populate_peptide_affinities(&k1, &mut db);
+
+        let mut iedb_map = HashMap::new();
+        iedb_map.insert(
+            "ASSLGE".to_string(),
+            vec![IedbDataRow {
+                amino_acid_sequence: "ASSLGE".to_string(),
+                original_sequence: "CASSLGEF".to_string(),
+                receptor_group: "group1".to_string(),
+                epitope: "epi1".to_string(),
+                organism: "org1".to_string(),
+                antigen: "ant1".to_string(),
+            }],
+        );
+
+        let out = multi_calc_k3(&k1, &input, &db, 0.0, &iedb_map, usize::MAX).unwrap();
+
+        assert_eq!(out.len(), 1, "expected one annotated match, got {out:?}");
+        let fields: Vec<&str> = out[0].trim_end().split('\t').collect();
+        assert_eq!(fields[0], "ASSLGQ");
+        assert_eq!(fields[1], "ASSLGE");
+        assert_eq!(&fields[3..], ["group1", "epi1", "ant1", "org1"]);
     }
 
     struct TestDatabase {
