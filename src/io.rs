@@ -456,12 +456,13 @@ pub fn read_excel(
     }
 
     // Extract all data as strings first
-    let mut columns: Vec<Vec<Option<String>>> = vec![Vec::new(); width];
+    // `range.headers()` allocates the whole first row, so evaluate it once, not per row.
+    let has_header_row = range.headers().is_some();
+    let n_rows = height.saturating_sub(skiprows);
+    let mut columns: Vec<Vec<Option<String>>> = vec![Vec::with_capacity(n_rows); width];
 
     for row_idx in skiprows..height {
-        if let Some(_h) = range.headers()
-            && row_idx == skiprows
-        {
+        if has_header_row && row_idx == skiprows {
             continue; // Skip header row
         }
         for (col_idx, item) in columns.iter_mut().enumerate().take(width) {

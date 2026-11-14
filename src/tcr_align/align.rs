@@ -2,6 +2,7 @@ use parasail_rs::aligner::Aligner;
 use parasail_rs::matrix::Matrix;
 use parasail_rs::profile::Profile;
 use polars::error::{PolarsError, PolarsResult};
+use rayon::prelude::*;
 use std::sync::OnceLock;
 
 static BLOSUM62: OnceLock<Result<Matrix, String>> = OnceLock::new();
@@ -137,7 +138,7 @@ pub fn build_protein_aligner(gap_open: i32, gap_extend: i32) -> PolarsResult<Ali
 /// # Panics
 /// This function does not explicitly panic but may propagate panics from the `Aligner`'s `align` method
 /// if it does not properly handle internal errors.
-pub fn run_parasail<S: AsRef<str>>(
+pub fn run_parasail<S: AsRef<str> + Sync>(
     aligner: &Aligner,
     a: &[S],
     reference: Option<&[S]>,
@@ -148,21 +149,20 @@ pub fn run_parasail<S: AsRef<str>>(
         ));
     }
 
-    let mut sum: i64 = 0;
-    let mut n: i64 = 0;
-
-    if let Some(b) = reference {
-        for query_seq in a {
-            sum += sum_scores_for_query(aligner, query_seq.as_ref().as_bytes(), b)?;
-            n += b.len() as i64;
-        }
-    } else {
-        for (i, query_seq) in a.iter().enumerate() {
-            let rest = &a[i + 1..];
-            sum += sum_scores_for_query(aligner, query_seq.as_ref().as_bytes(), rest)?;
-            n += rest.len() as i64;
-        }
-    }
+    // Each outer query row is an independent unit of work. Scores are integers, so the
+    // parallel reduction is exact and matches the serial result regardless of ordering.
+    // Rayon's work stealing balances the triangular workload of the all-vs-all case.
+    let (sum, n) = (0..a.len())
+        .into_par_iter()
+        .map(|i| {
+            let refs: &[S] = match reference {
+                Some(b) => b,
+                None => &a[i + 1..],
+            };
+            let row_sum = sum_scores_for_query(aligner, a[i].as_ref().as_bytes(), refs)?;
+            Ok::<_, PolarsError>((row_sum, refs.len() as i64))
+        })
+        .try_reduce(|| (0, 0), |(s1, n1), (s2, n2)| Ok((s1 + s2, n1 + n2)))?;
 
     Ok(if n == 0 {
         f64::NAN
@@ -191,7 +191,8 @@ fn sum_scores_for_query<S: AsRef<str>>(
     };
 
     let mut sum: i64 = 0;
-    if refs.len() >= MIN_REFS_FOR_PROFILE {
+    // Parasail cannot build a profile for an empty query, so it takes the per-call path.
+    if !query.is_empty() && refs.len() >= MIN_REFS_FOR_PROFILE {
         let profile = Profile::new(query, false, &aligner.matrix).map_err(map_err)?;
         let profiled = Aligner::new()
             .global()
@@ -328,6 +329,35 @@ mod tests {
             mean,
             expected
         );
+    }
+
+    /// Many sequences so the parallel reduction spans several rayon tasks.
+    fn many_cdr3s(n: usize) -> Vec<String> {
+        const AA: &[u8] = b"ACDEFGHIKLMNPQRSTVWY";
+        (0..n)
+            .map(|i| {
+                let len = 8 + (i * 7) % 7;
+                let body: String = (0..len)
+                    .map(|j| AA[(i * 31 + j * 17 + i * j) % AA.len()] as char)
+                    .collect();
+                format!("CA{body}F")
+            })
+            .collect()
+    }
+
+    #[rstest]
+    fn parallel_matches_serial_on_many_sequences(#[from(protein_aligner)] aligner: Aligner) {
+        let seqs = many_cdr3s(60);
+        let refs: Vec<&str> = seqs.iter().map(String::as_str).collect();
+        let (query, reference) = refs.split_at(25);
+
+        for b in [None, Some(reference)] {
+            let mean = run_parasail(&aligner, query, b).expect("call ok");
+            let expected = manual_mean(&aligner, query, b);
+            assert_eq!(mean, expected, "parallel mean differs from serial");
+        }
+        let mean_all = run_parasail(&aligner, &refs, None).expect("call ok");
+        assert_eq!(mean_all, manual_mean(&aligner, &refs, None));
     }
 
     // Test helper to set the BLOSUM62 OnceLock to a failure. This is only available in tests.
