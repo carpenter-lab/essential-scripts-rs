@@ -1,5 +1,6 @@
 pub mod helper;
 use crate::cores::{thread_default, thread_parser};
+use crate::progress::{Progress, ProgressArg};
 use clap::Subcommand;
 use std::path::PathBuf;
 
@@ -36,6 +37,9 @@ pub enum Commands {
 
         #[arg(short = 'm', long)]
         max_ram_gb: Option<usize>,
+
+        #[command(flatten)]
+        progress: ProgressArg,
     },
 }
 
@@ -50,6 +54,7 @@ pub fn handle_command(cmd: Commands) -> anyhow::Result<()> {
             keep_flanking,
             trust4,
             max_ram_gb,
+            progress,
         } => {
             let threads = crate::cores::process_cores(Some(threads))?;
             let stdout = std::io::stdout();
@@ -64,6 +69,7 @@ pub fn handle_command(cmd: Commands) -> anyhow::Result<()> {
                 keep_flanking,
                 trust4,
                 max_ram_gb,
+                progress.get().unwrap_or(Progress::Progress),
                 &mut handle,
             )
         }
