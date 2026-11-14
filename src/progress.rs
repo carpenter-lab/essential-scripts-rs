@@ -17,7 +17,7 @@ pub enum Progress {
     NoProgress,
 }
 
-trait SetDrawTarget<T> {
+pub(crate) trait SetDrawTarget<T> {
     fn apply(&self, pb: &T);
 }
 

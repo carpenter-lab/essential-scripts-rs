@@ -1,10 +1,12 @@
 use crate::cache;
+use crate::progress::{Progress, ProgressSettings, SetDrawTarget, progress_bar_with_message};
 use clap::ValueEnum;
+use indicatif::ProgressBar;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 pub const ALPHABET: &str = "ARNDCQEGHILKMFPSTWYV";
@@ -313,6 +315,158 @@ pub fn k3_sum(k1: &[[f32; 20]; 20], pep1: &Peptide, pep2: &Peptide) -> f32 {
     k3
 }
 
+/// Margin below the threshold within which a pair is still scored exactly.
+///
+/// [`QueryProfile::k3_sum_fast`] adds terms in a different order from [`k3_sum`], so the two
+/// round differently. This margin is far larger than the combined `f32`
+/// rounding error of both, so the prefilter never drops a pair that `k3_sum`
+/// would accept.
+pub const PREFILTER_MARGIN: f64 = 1e-2;
+
+// `k3_sum_fast` sums runs of every length from 1, so it assumes P_KMIN == 1.
+const _: () = assert!(P_KMIN == 1);
+
+/// Precomputed `k1` values for one input peptide, used by the fast prefilter.
+///
+/// `values[c * len + i]` holds `k1[a_i][c]` for input residue `a_i` and database
+/// residue `c`. Walking the grid one database residue at a time then reads one
+/// contiguous row per step, with no indexed lookups inside the inner loop. The
+/// profile is built once per input and reused against the whole database.
+///
+/// It also owns the scratch rows for the recurrence and the per-column sums,
+/// so scoring allocates nothing. Use one profile per thread.
+pub struct QueryProfile {
+    len: usize,
+    values: Vec<f32>,
+    prev: Vec<f32>,
+    curr: Vec<f32>,
+    /// `col_sums[i]` adds up every run ending in input column `i`. One sum per
+    /// column, rather than a single running total, means no addition waits on
+    /// the previous one, so the inner loop can be vectorized.
+    col_sums: Vec<f32>,
+}
+
+impl QueryProfile {
+    pub fn new(k1: &[[f32; 20]; 20], pep: &Peptide) -> Self {
+        let len = pep.indices.len();
+        let mut values = vec![0.0f32; 20 * len];
+        for (i, &ai) in pep.indices.iter().enumerate() {
+            for (c, &v) in k1[ai].iter().enumerate() {
+                values[c * len + i] = v;
+            }
+        }
+        Self {
+            len,
+            values,
+            prev: vec![0.0; len + 1],
+            curr: vec![0.0; len + 1],
+            col_sums: vec![0.0; len],
+        }
+    }
+
+    /// Approximates [`k3_sum`] of this input against `pep2` in
+    /// O(len1 * len2) instead of O(len1 * len2 * k).
+    ///
+    /// `k3_sum` adds, for every diagonal of the `len1 x len2` grid, the product
+    /// of `k1` terms over every contiguous run of length `P_KMIN..=max_k`.
+    /// Summing the runs that end at each cell gives the same total in one pass:
+    /// `s[j][i] = k1[a_i][b_j] * (1 + s[j-1][i-1])`.
+    ///
+    /// Works in `f32` for speed and adds terms in a different order from
+    /// `k3_sum`, so the two differ by rounding (well under 1e-3 relative,
+    /// against a [`PREFILTER_MARGIN`] of 1e-2). Use it to discard pairs, never
+    /// to report a score.
+    ///
+    /// Returns `None` when this shortcut does not apply: an empty sequence, or
+    /// both sequences longer than `P_KMAX`, where `k3_sum` caps the run length.
+    pub fn k3_sum_fast(&mut self, pep2: &Peptide) -> Option<f64> {
+        self.k3_sum_fast_residues(&pep2.indices)
+    }
+
+    /// [`Self::k3_sum_fast`] on raw residue codes (indices into [`ALPHABET`]),
+    /// so callers can pass a packed `u8` database without building a `Peptide`.
+    pub fn k3_sum_fast_residues<T: Copy>(&mut self, b: &[T]) -> Option<f64>
+    where
+        usize: From<T>,
+    {
+        let n = self.len;
+        if n == 0 || b.is_empty() || n.min(b.len()) > P_KMAX {
+            return None;
+        }
+
+        // curr[0] is reset every row and curr[1..] is fully overwritten, so
+        // only prev and the column sums need clearing between pairs.
+        self.prev.fill(0.0);
+        self.col_sums.fill(0.0);
+        let (mut prev, mut curr) = (&mut self.prev, &mut self.curr);
+        for &bj in b {
+            let bj = usize::from(bj);
+            let row = &self.values[bj * n..(bj + 1) * n];
+            curr[0] = 0.0;
+            update_row(&mut curr[1..], &mut self.col_sums, row, &prev[..n]);
+            std::mem::swap(&mut prev, &mut curr);
+        }
+        Some(f64::from(self.col_sums.iter().sum::<f32>()))
+    }
+}
+
+/// One row of the [`QueryProfile::k3_sum_fast`] recurrence:
+/// `curr[i] = row[i] * (1 + prev[i])` and `sums[i] += curr[i]`.
+///
+/// Takes separate slices, resliced to one length, so the compiler knows the
+/// outputs cannot overlap the inputs and needs no per-row length checks.
+///
+/// Note: as of Rust 1.99 / LLVM this still compiles to scalar code (one `f32`
+/// per instruction), with or without `-C target-cpu=native`, even when written
+/// in fixed blocks of 4. Vectorizing it would take explicit SIMD.
+#[inline(always)]
+fn update_row(curr: &mut [f32], sums: &mut [f32], row: &[f32], prev: &[f32]) {
+    let n = curr.len();
+    let (sums, row, prev) = (&mut sums[..n], &row[..n], &prev[..n]);
+    for (((c, s), &k), &p) in curr.iter_mut().zip(sums).zip(row).zip(prev) {
+        let run_sum = k * (1.0 + p);
+        *c = run_sum;
+        *s += run_sum;
+    }
+}
+
+/// Approximates [`k3_sum`]; see [`QueryProfile::k3_sum_fast`]. Builds a
+/// profile on every call, so loops over many pairs should reuse a
+/// [`QueryProfile`] instead.
+pub fn k3_sum_fast(k1: &[[f32; 20]; 20], pep1: &Peptide, pep2: &Peptide) -> Option<f64> {
+    QueryProfile::new(k1, pep1).k3_sum_fast(pep2)
+}
+
+/// Residue codes of many peptides packed into one contiguous `u8` buffer.
+///
+/// Each `Peptide` keeps its codes in its own `Vec<usize>`: 8 bytes per residue
+/// in a separate allocation. The prefilter reads the whole database once per
+/// input, so packing it (1 byte per residue, one block) keeps that pass in cache.
+pub struct PackedResidues {
+    codes: Vec<u8>,
+    /// Peptide `i` occupies `codes[offsets[i]..offsets[i + 1]]`.
+    offsets: Vec<usize>,
+}
+
+impl PackedResidues {
+    pub fn new(peps: &[Peptide]) -> Self {
+        let mut codes = Vec::with_capacity(peps.iter().map(|pep| pep.indices.len()).sum());
+        let mut offsets = Vec::with_capacity(peps.len() + 1);
+        offsets.push(0);
+        for pep in peps {
+            // Codes index ALPHABET, so they are always below 20.
+            codes.extend(pep.indices.iter().map(|&code| code as u8));
+            offsets.push(codes.len());
+        }
+        Self { codes, offsets }
+    }
+
+    #[inline]
+    pub fn get(&self, i: usize) -> &[u8] {
+        &self.codes[self.offsets[i]..self.offsets[i + 1]]
+    }
+}
+
 pub fn populate_peptide_affinities(k1: &[[f32; 20]; 20], peplist: &mut [Peptide]) {
     peplist.par_iter_mut().for_each(|pep| {
         pep.indices = pep
@@ -337,20 +491,43 @@ pub fn find_matches<'a>(
     peplist2: &'a [Peptide],
     threshold: f32,
     memory_limit: usize,
+    progress: &ProgressBar,
 ) -> anyhow::Result<Vec<SequenceMatch<'a>>> {
     let current_memory_usage = AtomicUsize::new(0);
     let approx_item_size = size_of::<SequenceMatch>() + 64;
 
+    // The prefilter normalizes every pair; precompute 1/sqrt(aff) once per
+    // peptide so the hot loop only multiplies. The exact score below keeps
+    // the original formula so reported scores round exactly as before.
+    let inv_sqrt_aff = |pep: &Peptide| 1.0 / f64::from(pep.aff).sqrt();
+    let db_inv_sqrt_aff: Vec<f64> = peplist2.iter().map(inv_sqrt_aff).collect();
+    let prefilter_cutoff = f64::from(threshold) - PREFILTER_MARGIN;
+    let db_residues = PackedResidues::new(peplist2);
+
     let raw_matches: anyhow::Result<Vec<Vec<SequenceMatch<'_>>>> = peplist1
         .par_iter()
         .map(|pep1| {
-            peplist2
+            let pep1_inv_sqrt_aff = inv_sqrt_aff(pep1);
+            // Built once per input, then reused against every database sequence.
+            let mut profile = QueryProfile::new(k1, pep1);
+            let pep1_matches = peplist2
                 .iter()
+                .zip(&db_inv_sqrt_aff)
                 .enumerate()
-                .filter_map(|(idx2, pep2)| {
+                .filter_map(|(idx2, (pep2, &pep2_inv_sqrt_aff))| {
+                    // Cheap prefilter: skip pairs clearly below the threshold.
+                    // Anything near or above it is rescored exactly below.
+                    if let Some(fast) = profile.k3_sum_fast_residues(db_residues.get(idx2)) {
+                        let approx = fast * pep1_inv_sqrt_aff * pep2_inv_sqrt_aff;
+                        if approx <= prefilter_cutoff {
+                            return None;
+                        }
+                    }
+
                     let score = k3_sum(k1, pep1, pep2) / (pep1.aff * pep2.aff).sqrt();
 
-                    if score <= threshold {
+                    // NaN (an empty sequence) must never count as a match.
+                    if score.is_nan() || score <= threshold {
                         return None;
                     }
 
@@ -372,7 +549,12 @@ pub fn find_matches<'a>(
                         target_index: idx2,
                     }))
                 })
-                .collect::<anyhow::Result<Vec<_>>>()
+                .collect::<anyhow::Result<Vec<_>>>();
+
+            // Advance by residues, not sequences: an input's cost grows with its
+            // length, so this keeps the rate and ETA steady in any input order.
+            progress.inc(pep1.len as u64);
+            pep1_matches
         })
         .collect();
 
@@ -397,38 +579,29 @@ pub fn find_matches<'a>(
     Ok(unique_vec)
 }
 
-pub fn multi_calc_k3(
-    k1: &[[f32; 20]; 20],
-    peplist1: &[Peptide],
-    peplist2: &[Peptide],
-    threshold: f32,
+/// Writes one output row for each IEDB annotation of the match's database
+/// sequence. When `prefix` is given, it and a tab start every row.
+pub fn write_match_rows<W: Write>(
+    writer: &mut W,
+    prefix: Option<&str>,
+    m: &SequenceMatch<'_>,
     iedb_map: &HashMap<String, Vec<IedbDataRow>>,
-    memory_limit: usize,
-) -> anyhow::Result<Vec<String>> {
-    let unique_vec = find_matches(k1, peplist1, peplist2, threshold, memory_limit)?;
-    let mut tcrmatch_output = Vec::new();
-
-    for tuple in unique_vec {
-        // Annotations belong to the database sequence (seq2), not the input (seq1).
-        let match_peptide = tuple.seq2;
-        if let Some(match_row_vec) = iedb_map.get(match_peptide) {
-            for match_row in match_row_vec {
-                let output_string = format!(
-                    "{}\t{}\t{:.6}\t{}\t{}\t{}\t{}\n",
-                    tuple.seq1,
-                    tuple.seq2,
-                    tuple.score,
-                    match_row.receptor_group,
-                    match_row.epitope,
-                    match_row.antigen,
-                    match_row.organism
-                );
-                tcrmatch_output.push(output_string);
-            }
+) -> std::io::Result<()> {
+    // Annotations belong to the database sequence (seq2), not the input (seq1).
+    let Some(rows) = iedb_map.get(m.seq2) else {
+        return Ok(());
+    };
+    for row in rows {
+        if let Some(prefix) = prefix {
+            write!(writer, "{prefix}\t")?;
         }
+        writeln!(
+            writer,
+            "{}\t{}\t{:.6}\t{}\t{}\t{}\t{}",
+            m.seq1, m.seq2, m.score, row.receptor_group, row.epitope, row.antigen, row.organism
+        )?;
     }
-
-    Ok(tcrmatch_output)
+    Ok(())
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -497,7 +670,8 @@ pub fn run_tcrmatch<W: Write, T: GetData>(
     keep_flanking: bool,
     trust4: bool,
     max_ram_gb: Option<usize>,
-    mut writer: W,
+    progress: Progress,
+    writer: W,
 ) -> anyhow::Result<()> {
     if threads < 1 {
         anyhow::bail!("Number of threads cannot be less than one.");
@@ -645,6 +819,15 @@ pub fn run_tcrmatch<W: Write, T: GetData>(
         }
     }
 
+    // Empty sequences (blank lines, empty AIRR cdr3_aa, or CDR3s such as "CF"
+    // that trimming empties) score 0/0 = NaN against everything.
+    let n_before = peplist1.len();
+    peplist1.retain(|pep| !pep.seq.is_empty());
+    let n_empty = n_before - peplist1.len();
+    if n_empty > 0 {
+        eprintln!("Skipping {n_empty} empty input sequence(s).");
+    }
+
     let mut peplist2 = Vec::with_capacity(iedb_data.len());
     for seq in iedb_data {
         for (i, b) in seq.bytes().enumerate() {
@@ -672,21 +855,32 @@ pub fn run_tcrmatch<W: Write, T: GetData>(
         });
     }
 
-    let tcrmatch_output = {
+    // The bar draws to stderr, so it never mixes with results on stdout.
+    // It counts input residues; find_matches advances it by each input's length.
+    let total_residues: usize = peplist1.iter().map(|pep| pep.len).sum();
+    let progress_bar = progress_bar_with_message(
+        total_residues,
+        "Matching input residues to database",
+        ProgressSettings::PositionSpeed,
+    )?;
+    progress.apply(&progress_bar);
+
+    let matches = {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .build()?;
         pool.install(|| {
-            multi_calc_k3(
+            find_matches(
                 &k1,
                 &peplist1,
                 &peplist2,
                 threshold,
-                &iedb_map,
                 memory_limit,
+                &progress_bar,
             )
         })?
     };
+    progress_bar.finish();
 
     let was_trimmed = if trimming { "trimmed_" } else { "" };
     let tcrmatch_output_header = format!(
@@ -694,25 +888,32 @@ pub fn run_tcrmatch<W: Write, T: GetData>(
         was_trimmed
     );
 
+    // A locked stdout flushes on every newline; buffer the rows instead.
+    let mut writer = BufWriter::new(writer);
+
     if trust4 {
         writeln!(writer, "{trust4header}\t{tcrmatch_output_header}")?;
+
+        // Group matches by input sequence, keeping their order within each group.
+        let mut matches_by_input: HashMap<&str, Vec<&SequenceMatch<'_>>> = HashMap::new();
+        for m in &matches {
+            matches_by_input.entry(m.seq1).or_default().push(m);
+        }
+
         for input_line in &inputlines {
-            let aa_seq_trust = get_nth_field(input_line, 3);
-            let trimmed_trust = trim(aa_seq_trust);
-            for out in &tcrmatch_output {
-                let seq_tcrmatch = get_nth_field(out, 0);
-                if trimmed_trust == seq_tcrmatch {
-                    write!(writer, "{input_line}\t{out}")?;
-                }
+            let trimmed_trust = trim(get_nth_field(input_line, 3));
+            for m in matches_by_input.get(trimmed_trust).into_iter().flatten() {
+                write_match_rows(&mut writer, Some(input_line), m, &iedb_map)?;
             }
         }
     } else {
         writeln!(writer, "{tcrmatch_output_header}")?;
-        for out in &tcrmatch_output {
-            write!(writer, "{out}")?;
+        for m in &matches {
+            write_match_rows(&mut writer, None, m, &iedb_map)?;
         }
     }
 
+    writer.flush()?;
     Ok(())
 }
 
@@ -779,7 +980,7 @@ mod tests {
     }
 
     #[test]
-    fn test_multi_calc_k3_joins_on_database_sequence() {
+    fn test_write_match_rows_joins_on_database_sequence() {
         let k1 = fmatrix_k1();
         let pep = |s: &str| Peptide {
             seq: s.to_string(),
@@ -807,13 +1008,143 @@ mod tests {
             }],
         );
 
-        let out = multi_calc_k3(&k1, &input, &db, 0.0, &iedb_map, usize::MAX).unwrap();
+        let matches = find_matches(&k1, &input, &db, 0.0, usize::MAX, &ProgressBar::hidden()).unwrap();
+        assert_eq!(matches.len(), 1);
 
-        assert_eq!(out.len(), 1, "expected one annotated match, got {out:?}");
-        let fields: Vec<&str> = out[0].trim_end().split('\t').collect();
+        let mut buf = Vec::new();
+        write_match_rows(&mut buf, None, &matches[0], &iedb_map).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+
+        let rows: Vec<&str> = out.lines().collect();
+        assert_eq!(rows.len(), 1, "expected one annotated row, got {out:?}");
+        let fields: Vec<&str> = rows[0].split('\t').collect();
         assert_eq!(fields[0], "ASSLGQ");
         assert_eq!(fields[1], "ASSLGE");
         assert_eq!(&fields[3..], ["group1", "epi1", "ant1", "org1"]);
+
+        let mut buf = Vec::new();
+        write_match_rows(&mut buf, Some("line\tdata"), &matches[0], &iedb_map).unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.starts_with("line\tdata\tASSLGQ\tASSLGE\t"), "got {out:?}");
+        assert!(out.ends_with('\n'));
+    }
+
+    /// Deterministic random peptides (xorshift), so tests need no RNG crate.
+    fn random_peptides(seed: u64, count: usize, min_len: usize, max_len: usize) -> Vec<Peptide> {
+        let mut state = seed.max(1);
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let alphabet = ALPHABET.as_bytes();
+        let mut peps: Vec<Peptide> = (0..count)
+            .map(|_| {
+                let len = min_len + (next() as usize) % (max_len - min_len + 1);
+                let seq: String = (0..len)
+                    .map(|_| alphabet[(next() as usize) % alphabet.len()] as char)
+                    .collect();
+                Peptide {
+                    len: seq.len(),
+                    seq,
+                    aff: -99.9,
+                    indices: Vec::new(),
+                }
+            })
+            .collect();
+        populate_peptide_affinities(&fmatrix_k1(), &mut peps);
+        peps
+    }
+
+    #[test]
+    fn test_k3_sum_fast_agrees_with_k3_sum() {
+        let k1 = fmatrix_k1();
+        let a = random_peptides(1, 60, 1, 30);
+        let b = random_peptides(2, 60, 1, 45);
+        let packed = PackedResidues::new(&b);
+        let (mut max_rel, mut max_norm_err) = (0.0f64, 0.0f64);
+        for p1 in &a {
+            // Reuse one profile, as find_matches does, to check the scratch
+            // rows are reset between pairs.
+            let mut profile = QueryProfile::new(&k1, p1);
+            for (j, p2) in b.iter().enumerate() {
+                let exact = f64::from(k3_sum(&k1, p1, p2));
+                let fast = profile.k3_sum_fast(p2).expect("shortcut applies");
+                let fresh = k3_sum_fast(&k1, p1, p2).expect("shortcut applies");
+                assert_eq!(fast.to_bits(), fresh.to_bits(), "reused profile drifted");
+                let packed_fast = profile
+                    .k3_sum_fast_residues(packed.get(j))
+                    .expect("shortcut applies");
+                assert_eq!(packed_fast.to_bits(), fast.to_bits(), "packed codes differ");
+                let rel = (fast - exact).abs() / exact.abs().max(1e-30);
+                assert!(rel < 1e-3, "{} vs {}: fast {fast}, exact {exact}", p1.seq, p2.seq);
+                max_rel = max_rel.max(rel);
+
+                let norm = |x: f64| x / (f64::from(p1.aff) * f64::from(p2.aff)).sqrt();
+                let norm_err = (norm(fast) - norm(exact)).abs();
+                assert!(
+                    norm_err < PREFILTER_MARGIN / 10.0,
+                    "normalized score error too close to the prefilter margin"
+                );
+                max_norm_err = max_norm_err.max(norm_err);
+            }
+        }
+        eprintln!("max relative error {max_rel:e}, max normalized error {max_norm_err:e}");
+    }
+
+    #[test]
+    fn test_k3_sum_fast_falls_back_when_shortcut_does_not_apply() {
+        let k1 = fmatrix_k1();
+        let empty = random_peptides(3, 1, 0, 0).remove(0);
+        let short = random_peptides(4, 1, 10, 10).remove(0);
+        let long_a = random_peptides(5, 1, P_KMAX + 1, P_KMAX + 5).remove(0);
+        let long_b = random_peptides(6, 1, P_KMAX + 1, P_KMAX + 5).remove(0);
+
+        assert!(k3_sum_fast(&k1, &empty, &short).is_none());
+        assert!(k3_sum_fast(&k1, &short, &empty).is_none());
+        assert!(k3_sum_fast(&k1, &long_a, &long_b).is_none());
+        assert!(k3_sum_fast(&k1, &short, &long_a).is_some());
+    }
+
+    #[test]
+    fn test_find_matches_identical_to_exact_scan() {
+        let k1 = fmatrix_k1();
+        // Mutate copies of the database so many pairs land near each threshold.
+        let db = random_peptides(7, 80, 8, 18);
+        let mut input = random_peptides(8, 40, 8, 18);
+        for (i, pep) in input.iter_mut().enumerate().take(30) {
+            let mut seq = db[i].seq.clone().into_bytes();
+            let pos = i % seq.len();
+            seq[pos] = ALPHABET.as_bytes()[(i * 7) % 20];
+            pep.seq = String::from_utf8(seq).unwrap();
+            pep.len = pep.seq.len();
+        }
+        populate_peptide_affinities(&k1, &mut input);
+
+        for threshold in [0.5f32, 0.8, 0.9, 0.97] {
+            let mut expected = Vec::new();
+            for p1 in &input {
+                for (j, p2) in db.iter().enumerate() {
+                    let score = k3_sum(&k1, p1, p2) / (p1.aff * p2.aff).sqrt();
+                    if score > threshold {
+                        expected.push((p1.seq.clone(), j, score.to_bits()));
+                    }
+                }
+            }
+
+            let mut got: Vec<_> = find_matches(&k1, &input, &db, threshold, usize::MAX, &ProgressBar::hidden())
+                .unwrap()
+                .into_iter()
+                .map(|m| (m.seq1.to_string(), m.target_index, m.score.to_bits()))
+                .collect();
+            got.sort();
+            expected.sort();
+            expected.dedup();
+
+            assert!(!expected.is_empty(), "test data has no matches at {threshold}");
+            assert_eq!(got, expected, "mismatch at threshold {threshold}");
+        }
     }
 
     struct TestDatabase {
@@ -853,6 +1184,7 @@ mod tests {
             false,
             false,
             None,
+            Progress::NoProgress,
             &mut output,
         )
         .unwrap();
@@ -860,6 +1192,115 @@ mod tests {
         let out_str = String::from_utf8(output).unwrap();
         assert!(out_str.contains("trimmed_input_sequence\tmatch_sequence\tscore\treceptor_group\tepitope\tantigen\torganism"));
         assert!(out_str.contains("ASSLG\tASSLG\t1.000000\tgroup1\tepi1\tant1\torg1"));
+    }
+
+    #[test]
+    fn test_packed_residues_round_trip() {
+        let peps = random_peptides(13, 30, 0, 25);
+        let packed = PackedResidues::new(&peps);
+        for (i, pep) in peps.iter().enumerate() {
+            let codes: Vec<usize> = packed.get(i).iter().map(|&c| usize::from(c)).collect();
+            assert_eq!(codes, pep.indices, "peptide {i} ({})", pep.seq);
+        }
+    }
+
+    #[test]
+    fn test_find_matches_advances_progress_by_residues() {
+        let k1 = fmatrix_k1();
+        let input = random_peptides(11, 25, 5, 20);
+        let db = random_peptides(12, 10, 8, 15);
+        let total_residues: u64 = input.iter().map(|pep| pep.len as u64).sum();
+
+        let pb = ProgressBar::hidden();
+        find_matches(&k1, &input, &db, 0.97, usize::MAX, &pb).unwrap();
+        assert_eq!(pb.position(), total_residues);
+    }
+
+    #[test]
+    fn test_find_matches_rejects_empty_sequence() {
+        let k1 = fmatrix_k1();
+        let input = random_peptides(9, 1, 0, 0);
+        let db = random_peptides(10, 5, 8, 15);
+
+        let matches = find_matches(&k1, &input, &db, 0.0, usize::MAX, &ProgressBar::hidden()).unwrap();
+        assert!(matches.is_empty(), "empty sequence matched {} entries", matches.len());
+    }
+
+    #[test]
+    fn test_run_tcrmatch_skips_empty_input_sequences() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let input_file = temp_dir.path().join("input.txt");
+
+        let test_db = TestDatabase {
+            data: String::from(
+                "trimmed_seq\toriginal_seq\treceptor_group\tepitope\torganism\tantigen\n\
+             ASSLG\tCASSLGF\tgroup1\tepi1\torg1\tant1\n\
+             ASSQDRDTQY\tASSQDRDTQY\tgroup2\tepi2\torg2\tant2\n",
+            ),
+            path: temp_dir.path().join("db.tsv"),
+        };
+
+        // A blank line, and "CF", which trimming reduces to an empty sequence.
+        std::fs::write(&input_file, "CASSLGF\n\nCF\n").unwrap();
+
+        let mut output = Vec::new();
+        run_tcrmatch(
+            &input_file, &test_db, 1, 0.0, false, false, false, None, Progress::NoProgress, &mut output,
+        )
+        .unwrap();
+
+        let out_str = String::from_utf8(output).unwrap();
+        let rows: Vec<&str> = out_str.lines().skip(1).collect();
+        assert!(!rows.is_empty(), "expected matches for CASSLGF");
+        assert!(
+            rows.iter().all(|row| row.starts_with("ASSLG\t")),
+            "an empty input sequence produced output rows:\n{out_str}"
+        );
+    }
+
+    #[test]
+    fn test_run_tcrmatch_trust4_rows_follow_input_lines() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let input_file = temp_dir.path().join("input.txt");
+
+        let test_db = TestDatabase {
+            data: String::from(
+                "trimmed_seq\toriginal_seq\treceptor_group\tepitope\torganism\tantigen\n\
+             ASSLG\tCASSLGF\tgroup1\tepi1\torg1\tant1\n\
+             ASSQDRDTQY\tASSQDRDTQY\tgroup2\tepi2\torg2\tant2\n",
+            ),
+            path: temp_dir.path().join("db.tsv"),
+        };
+
+        // Lines 1 and 3 share a CDR3; every line matches both entries at threshold 0.
+        let lines = [
+            "10\t0.05\tAAAG\tCASSLGF\tTRBV2*01\tTRBD1*01\tTRBJ1*01\tTRBC1\tcid1\tfull",
+            "7\t0.03\tAAAC\tCASSQDRDTQYF\tTRBV5*01\tTRBD1*01\tTRBJ2*01\tTRBC1\tcid2\tfull",
+            "3\t0.01\tAAAT\tCASSLGF\tTRBV2*01\tTRBD2*01\tTRBJ1*01\tTRBC1\tcid3\tfull",
+        ];
+        std::fs::write(
+            &input_file,
+            format!(
+                "#count\tfrequency\tCDR3nt\tCDR3aa\tV\tD\tJ\tC\tcid\tcid_full_length\n{}\n",
+                lines.join("\n")
+            ),
+        )
+        .unwrap();
+
+        let mut output = Vec::new();
+        run_tcrmatch(
+            &input_file, &test_db, 1, 0.0, false, false, true, None, Progress::NoProgress, &mut output,
+        )
+        .unwrap();
+
+        let out_str = String::from_utf8(output).unwrap();
+        let rows: Vec<&str> = out_str.lines().skip(1).collect();
+        assert_eq!(rows.len(), 6, "expected two rows per input line:\n{out_str}");
+        for (i, line) in lines.iter().enumerate() {
+            for row in &rows[2 * i..2 * i + 2] {
+                assert!(row.starts_with(&format!("{line}\t")), "row out of order: {row}");
+            }
+        }
     }
 
     #[test]
@@ -887,6 +1328,7 @@ mod tests {
             true,
             false,
             None,
+            Progress::NoProgress,
             &mut output,
         )
         .unwrap();
@@ -929,6 +1371,7 @@ mod tests {
             true,
             false,
             None,
+            Progress::NoProgress,
             &mut output,
         )
         .unwrap();
@@ -968,6 +1411,7 @@ mod tests {
             false,
             true,
             None,
+            Progress::NoProgress,
             &mut output,
         )
         .unwrap();
@@ -994,6 +1438,7 @@ mod tests {
                 false,
                 false,
                 None,
+                Progress::NoProgress,
                 &mut output,
             )
             .is_err()
@@ -1009,6 +1454,7 @@ mod tests {
                 false,
                 false,
                 None,
+                Progress::NoProgress,
                 &mut output,
             )
             .is_err()
