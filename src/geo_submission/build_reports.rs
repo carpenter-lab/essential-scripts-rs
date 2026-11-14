@@ -22,25 +22,22 @@ pub(super) fn build_records_from_paths<T: FromPathWithMd5>(
     parallel: &bool,
     jobs: &usize,
 ) -> Vec<T> {
-    let build = |paths: Vec<PathBuf>| {
-        paths
-            .into_par_iter()
-            .filter_map(|p| match T::from_path_with_md5(p, pb) {
-                Ok(rec) => Some(rec),
-                Err(e) => {
-                    eprintln!("Error building record: {}", e);
-                    None
-                }
-            })
-            .collect()
+    let build_one = |p: PathBuf| match T::from_path_with_md5(p, pb) {
+        Ok(rec) => Some(rec),
+        Err(e) => {
+            eprintln!("Error building record: {}", e);
+            None
+        }
     };
 
+    // Serial mode must not touch rayon at all; otherwise it would silently run on the
+    // global pool and use every core despite `--parallel false` / `-j 1`.
     if !*parallel || jobs == &1 {
-        return build(paths);
+        return paths.into_iter().filter_map(build_one).collect();
     }
 
     match rayon::ThreadPoolBuilder::new().num_threads(*jobs).build() {
-        Ok(pool) => pool.install(|| build(paths)),
+        Ok(pool) => pool.install(|| paths.into_par_iter().filter_map(build_one).collect()),
         Err(e) => {
             eprintln!("Failed to build rayon pool: {}; falling back", e);
             build_records_from_paths(paths, pb, &false, &1)

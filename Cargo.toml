@@ -44,7 +44,7 @@ features = ["svg_backend", "bitmap_backend", "ttf", "bitmap_encoder"]
 [features]
 default = ["base_cmd"]
 enrichment = ["dep:reqwest", "dep:serde", "dep:serde_json", "dep:plotters", "dep:plotters-cairo", "dep:cairo-rs"]
-tcr = ["dep:parasail-rs", "dep:rand"]
+tcr = ["dep:parasail-rs", "dep:rand", "dep:rayon"]
 base_cmd = ["dep:indicatif", "dep:regex", "dep:md5", "dep:walkdir", "dep:rayon", "dep:calamine", "dep:tokio", "dep:polars", "dep:num_cpus", "dep:reqwest", "dep:serde", "dep:urlencoding", "dep:anyhow"]
 
 [profile.release]
