@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.3.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v1.2.0...v1.3.0) (2026-11-14)
+
+
+### Features
+
+* add subcommands for run-gliph, run-tcr-dist, and tcr-match ([#67](https://github.com/carpenter-lab/essential-scripts-rs/issues/67)) ([57be412](https://github.com/carpenter-lab/essential-scripts-rs/commit/57be412b4e2ae42bb16e2e9e152ab6a638b20406))
+* implement TCRMatch ([57be412](https://github.com/carpenter-lab/essential-scripts-rs/commit/57be412b4e2ae42bb16e2e9e152ab6a638b20406))
+
+
+### Bug Fixes
+
+* also error if CDR3b is "" in input file ([57be412](https://github.com/carpenter-lab/essential-scripts-rs/commit/57be412b4e2ae42bb16e2e9e152ab6a638b20406))
+* **deps:** update zip to 9.0.5 ([#65](https://github.com/carpenter-lab/essential-scripts-rs/issues/65)) ([538bd55](https://github.com/carpenter-lab/essential-scripts-rs/commit/538bd554e1c4c6aff289f6f25530e9db22f6d876))
+* **tcr-align:** keep index in scoring ([57be412](https://github.com/carpenter-lab/essential-scripts-rs/commit/57be412b4e2ae42bb16e2e9e152ab6a638b20406))
+
+
+### Performance Improvements
+
+* parallelize TCR alignment scoring and reuse query profiles ([#73](https://github.com/carpenter-lab/essential-scripts-rs/issues/73)) ([ee688fb](https://github.com/carpenter-lab/essential-scripts-rs/commit/ee688fb8f0c9f51a4e9bf5ca244e4422d9401452))
+* **tcrmatch:** add exact-safe fast prefilter, streamed output and progress bar ([#71](https://github.com/carpenter-lab/essential-scripts-rs/issues/71)) ([96c318d](https://github.com/carpenter-lab/essential-scripts-rs/commit/96c318d6139c459fc2f62610c4c99ac73acc5c33))
+
 ## [1.2.0](https://github.com/carpenter-lab/essential-scripts-rs/compare/v1.1.0...v1.2.0) (2026-10-13)
 
 
