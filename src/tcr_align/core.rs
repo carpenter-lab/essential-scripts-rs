@@ -174,6 +174,7 @@ fn score_df(df: &DataFrame, replicates: usize) -> Result<DataFrame> {
 /// * `output_file` - A `PathBuf` representing the destination for the computed TCR score output.
 ///   If `output_file` points to `stdout`, the output will be printed to the standard output.
 /// * `replicates` - The number of replicates to use in performing the scoring computation.
+/// * `cores` - The number of threads used to score groups in parallel.
 ///
 /// # Panics
 ///
@@ -194,7 +195,7 @@ fn score_df(df: &DataFrame, replicates: usize) -> Result<DataFrame> {
 /// let output = PathBuf::from("tcr_output.csv");
 /// let replicates = 3;
 ///
-/// tcr_score(input, output, replicates);
+/// tcr_score(input, output, replicates, 4);
 /// ```
 ///
 /// Ensure the input CSV file follows the expected format for TCR alignments, or the computation will fail.
@@ -202,10 +203,13 @@ pub(crate) fn tcr_score(
     input_file: PathBuf,
     output_file: PathBuf,
     replicates: usize,
+    cores: usize,
 ) -> Result<()> {
     let df = read_from_file(input_file, None)?.collect()?;
 
-    score_df(&df, replicates)?.write_to_csv_or_stdout(output_file)
+    let pool = crate::cores::build_pool(cores)?;
+    pool.install(|| score_df(&df, replicates))?
+        .write_to_csv_or_stdout(output_file)
 }
 
 #[cfg(test)]
