@@ -28,6 +28,14 @@ pub enum Commands {
 
         #[arg(short, long, default_value_t = 1000)]
         replicates: usize,
+
+        #[arg(
+            long,
+            value_parser = crate::cores::thread_parser(),
+            default_value_t = crate::cores::thread_default(),
+            help = "Number of cores to use. 0 = all available; negative values subtract from available cores"
+        )]
+        cores: i32,
     },
 }
 
@@ -38,6 +46,7 @@ pub fn handle_command(cmd: Commands) -> Result<()> {
             input_file,
             output_file,
             replicates,
+            cores,
         } => {
             let input_file = input_file.ok_or_else(|| {
                 Error::raw(
@@ -52,7 +61,8 @@ pub fn handle_command(cmd: Commands) -> Result<()> {
                 )
             })?;
 
-            core::tcr_score(input_file, output_file, replicates)
+            let cores = crate::cores::process_cores(Some(cores))?;
+            core::tcr_score(input_file, output_file, replicates, cores)
         }
     }
     #[cfg(not(feature = "tcr"))]
@@ -75,6 +85,7 @@ mod tests {
             input_file: None,
             output_file: Some(PathBuf::from("out.csv")),
             replicates: 1,
+            cores: 1,
         };
 
         let err = handle_command(cmd).expect_err("expected missing input_file error");
@@ -91,6 +102,7 @@ mod tests {
             input_file: Some(PathBuf::from("in.csv")),
             output_file: None,
             replicates: 1,
+            cores: 1,
         };
 
         let err = handle_command(cmd).expect_err("expected missing output_file error");
@@ -107,6 +119,7 @@ mod tests {
             input_file: None,
             output_file: None,
             replicates: 1,
+            cores: 1,
         };
 
         let err = handle_command(cmd).expect_err("expected feature-gated error");
