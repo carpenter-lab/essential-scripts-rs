@@ -1,13 +1,14 @@
-use crate::progress::{Progress, ProgressSettings, dual_progress_bars};
+use crate::progress::{ProgressSettings, progress_bar_with_message};
 use crate::tcr_align::align::{build_protein_aligner, run_parasail};
 use anyhow::{Context, Result};
 use indicatif::ProgressBar;
 use parasail_rs::aligner::Aligner;
 use polars::frame::{DataFrame, UniqueKeepStrategy};
 use polars::prelude::{ExplodeOptions, IntoLazy, NamedFrom, Series, col, len, lit};
-use rand::SeedableRng;
 use rand::prelude::IndexedRandom;
 use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
+use rayon::prelude::*;
 use std::collections::HashSet;
 
 // Limit the number of sequences per group to avoid excessive computation time.
@@ -19,9 +20,70 @@ const MAX_BG_SEQS: usize = 1000;
 
 struct ScoreContext<'a> {
     rng: &'a mut SmallRng,
-    pb: &'a ProgressBar,
     aligner: &'a Aligner,
     pattern: &'a str,
+    /// Counts alignments, so the ETA stays steady even though groups differ hugely in size.
+    pb: &'a ProgressBar,
+    /// Alignments this group has reported to `pb` so far.
+    done: u64,
+}
+
+impl ScoreContext<'_> {
+    fn advance(&mut self, alignments: u64) {
+        self.pb.inc(alignments);
+        self.done += alignments;
+    }
+}
+
+/// Number of alignments `run_parasail` runs for `n` sequences aligned against each other.
+fn pairs(n: usize) -> u64 {
+    (n as u64) * (n as u64).saturating_sub(1) / 2
+}
+
+/// Background sample size for a group whose `TcRa` list has `n_seqs` sequences after downsampling.
+fn background_size(n_seqs: usize, n_unique: usize) -> usize {
+    n_seqs.min(n_unique).min(MAX_BG_SEQS)
+}
+
+/// Number of alignments scoring group `i` will run, used to size the progress bar.
+///
+/// This matches what `score_group` reports, except that a failed alignment skips the
+/// background replicates; `calculate_scores` makes up the difference when the group finishes.
+fn group_work(
+    groups: &DataFrame,
+    i: usize,
+    pattern: &str,
+    n_unique_alpha: usize,
+    n_replicates: usize,
+) -> u64 {
+    if pattern == "single" {
+        return 0;
+    }
+    let chain_len = |chain: &str| {
+        get_list_cell_as_vec_utf8(groups, chain, i).map_or(0, |v| v.len().min(MAX_GROUP_SEQS))
+    };
+    let n_b = chain_len("TcRb");
+    let n_a = chain_len("TcRa");
+    let mut work = pairs(n_b) + pairs(n_a);
+    if n_a > 1 {
+        work += n_replicates as u64 * pairs(background_size(n_a, n_unique_alpha));
+    }
+    work
+}
+
+/// Scores for one group (one row of the grouped `DataFrame`).
+struct GroupScores {
+    self_a: f64,
+    self_b: f64,
+    frac: f64,
+}
+
+impl GroupScores {
+    const NAN: Self = Self {
+        self_a: f64::NAN,
+        self_b: f64::NAN,
+        frac: f64::NAN,
+    };
 }
 
 /// Extracts all unique TcRa CDR3 alpha sequences from a given `DataFrame`.
@@ -314,9 +376,9 @@ fn get_list_cell_as_vec_utf8(
 ///   4. `"TcRa_alignment_score_v_background"` (`f64`): The fractions of `TcRa` self-alignment scores compared to background replicates.
 ///
 /// ### Notes
-/// This function makes use of the `SmallRng` random number generator from the `rand` crate to introduce stochasticity
-/// in calculating background replicates. The `calculate_scores` function
-/// performs the core operations for score calculation.
+/// Groups are scored in parallel on the current rayon thread pool (use `ThreadPool::install` to
+/// control the thread count). Each group gets its own `SmallRng`, seeded from one random base seed
+/// plus the group's row number, so the random sampling doesn't depend on thread scheduling.
 ///
 /// ### Errors
 /// - If the `"pattern"` column is missing or cannot be converted, an error is returned.
@@ -358,29 +420,28 @@ pub(crate) fn fraction_self_greater(
     // dtype, usually i64 from CSV parsing, and still matches when joined back onto the input.
     let index = groups.column("index")?.clone();
 
-    let mut out_pattern: Vec<String> = Vec::with_capacity(height);
-    let mut out_self_a: Vec<f64> = Vec::with_capacity(height);
-    let mut out_self_b: Vec<f64> = Vec::with_capacity(height);
-    let mut out_frac: Vec<f64> = Vec::with_capacity(height);
-
-    let mut rng = SmallRng::from_rng(&mut rand::rng());
-
-    calculate_scores(
+    let base_seed: u64 = rand::rng().random();
+    let scores = calculate_scores(
         groups,
         all_unique_alpha,
         n_replicates,
         gap_open,
         gap_extend,
         &patterns,
-        &mut out_pattern,
-        &mut out_self_a,
-        &mut out_self_b,
-        &mut out_frac,
-        &mut rng,
+        base_seed,
     )?;
 
+    let mut out_self_a: Vec<f64> = Vec::with_capacity(height);
+    let mut out_self_b: Vec<f64> = Vec::with_capacity(height);
+    let mut out_frac: Vec<f64> = Vec::with_capacity(height);
+    for s in scores {
+        out_self_a.push(s.self_a);
+        out_self_b.push(s.self_b);
+        out_frac.push(s.frac);
+    }
+
     DataFrame::new_infer_height(vec![
-        Series::new("pattern".into(), out_pattern).into(),
+        Series::new("pattern".into(), patterns).into(),
         index,
         Series::new("TcRa_alignment_score".into(), out_self_a).into(),
         Series::new("TcRb_alignment_score".into(), out_self_b).into(),
@@ -389,128 +450,30 @@ pub(crate) fn fraction_self_greater(
     .context("Failed to create output DataFrame with alignment scores and fractions")
 }
 
-fn downsample_vec(
-    v: Vec<String>,
-    pattern: &str,
-    pb: &ProgressBar,
-    rng: &mut SmallRng,
-) -> Vec<String> {
-    let out: Vec<String> = if v.len() > MAX_GROUP_SEQS {
-        pb.set_message(format!(
-            "Downsampling {p} {full} -> {maxg}",
-            p = pattern,
-            full = v.len(),
-            maxg = MAX_GROUP_SEQS
-        ));
+fn downsample_vec(v: Vec<String>, rng: &mut SmallRng) -> Vec<String> {
+    if v.len() > MAX_GROUP_SEQS {
         v.sample(rng, MAX_GROUP_SEQS).cloned().collect()
     } else {
         v
-    };
-    out
+    }
 }
 
-/// Calculates scores based on the given input parameters. This function performs multiple
-/// alignments, calculates self-similarity scores, and evaluates the statistical significance
-/// of these scores against background sequences. It also handles the generation of progress
-/// bars for tracking computation progress.
+/// Scores every group in `groups`, in parallel on the current rayon thread pool.
 ///
-/// # Parameters
+/// For each group, this computes the mean self-alignment score of its `TcRb` and `TcRa`
+/// sequences and, for `TcRa`, the fraction of `n_replicates` background samples (drawn from
+/// `all_unique_alpha`) whose mean score is worse than the group's. Groups whose pattern is
+/// `"single"` get `NaN` for every score; a missing `TcRb` or `TcRa` list gives `NaN` for that
+/// chain's scores.
 ///
-/// - `groups`: A `DataFrame` containing input data, each row corresponding to a single group
-///   of items for which scores are calculated.
-/// - `all_unique_alpha`: A reference to a vector of all unique alpha sequences to be used for
-///   background sampling during statistical significance evaluation.
-/// - `n_replicates`: The number of replicates to run for statistical significance evaluation.
-/// - `gap_open`: Gap opening penalty value used by the aligner during sequence alignment.
-/// - `gap_extend`: Gap extension penalty value used by the aligner during sequence alignment.
-/// - `patterns`: A slice of strings representing the patterns used to process each group.
-/// - `out_pattern`: A mutable reference to a vector where the output patterns will be stored.
-/// - `out_self_a`: A mutable reference to a vector where self-similarity scores for `TcRa`
-///   sequences will be stored.
-/// - `out_self_b`: A mutable reference to a vector where self-similarity scores for `TcRb`
-///   sequences will be stored.
-/// - `out_frac`: A mutable reference to a vector where fraction scores (statistical significance)
-///   will be stored.
-/// - `rng`: A mutable reference to a random number generator (`SmallRng`) used for background
-///   sampling and random operations.
-///
-/// # Behavior
-///
-/// - The function first initializes progress bars to track progress of the computation. If a
-///   progress bar fails to initialize, the computation continues with hidden progress indicators.
-/// - A protein aligner is built using the provided `gap_open` and `gap_extend` penalties. If the
-///   aligner fails to initialize, an error message is printed and the function exits early.
-/// - Iterates over all rows (or groups) in the `groups` dataset (up to `height` number of items).
-///   For each group:
-///   - Processes the `TcRb` sequences and calculates their self-similarity scores. If no valid
-///     data is found, `NaN` is stored in the output vectors.
-///   - Similarly processes the `TcRa` sequences to calculate their self-similarity.
-///   - Performs statistical significance testing using background sequences sampled from
-///     `all_unique_alpha`. Fraction scores representing the proportion of replicates where the
-///     observed self-similarity score is better (lower) than the background score are calculated
-///     and stored in the `out_frac` vector.
-///   - Outputs `NaN` values for groups with insufficient data or patterns marked as "single".
-/// - Updates the progress bars as the computation proceeds.
+/// Returns one `GroupScores` per row of `groups`, in row order. Group `i` samples with a
+/// `SmallRng` seeded from `base_seed + i`, so results for a given seed don't depend on how
+/// rayon schedules the groups.
 ///
 /// # Errors
 ///
-/// - If there are issues with building the protein aligner or running the parasail alignment
-///   library, error messages are printed and `NaN` values are assigned to the relevant outputs.
-/// - Errors associated with accessing data from the `groups` dataset are handled by assigning
-///   `NaN` values to the output scores.
-///
-/// # Notes
-///
-/// - The function uses `indicatif::ProgressBar` and `indicatif::MultiProgress` to provide a user
-///   interface for tracking progress.
-/// - This function is designed to handle large input datasets efficiently and supports parallel
-///   computation for statistical evaluations using the parasail alignment library.
-/// - The function assumes a maximum number of background sequences (`MAX_BG_SEQS`) for comparisons.
-/// - The provided patterns must align with the rows in `groups`, and missing patterns or invalid
-///   indices result in default or `NaN` outputs.
-///
-/// # Example Usage
-///
-/// ```ignore
-/// use rand::rngs::SmallRng;
-/// use rand::SeedableRng;
-/// let mut rng = SmallRng::from_entropy();
-///
-/// let groups = load_dataframe(); // Load a DataFrame from some source.
-/// let all_unique_alpha = vec![String::from("SEQ1"), String::from("SEQ2")];
-/// let n_replicates = 100;
-/// let mut out_pattern = vec![];
-/// let mut out_self_a = vec![];
-/// let mut out_self_b = vec![];
-/// let mut out_frac = vec![];
-///
-/// calculate_scores(
-///     &groups,
-///     &all_unique_alpha,
-///     n_replicates,
-///     -10,
-///     -1,
-///     &vec![String::from("pattern1"), String::from("pattern2")],
-///     &mut out_pattern,
-///     &mut out_self_a,
-///     &mut out_self_b,
-///     &mut out_frac,
-///     &mut rng,
-/// );
-/// ```
-///
-/// # Dependencies
-///
-/// - Requires the `indicatif` crate for progress bars.
-/// - Uses the `rand` crate for random number generation.
-/// - Relies on the parasail alignment library for sequence alignment operations.
-///
-/// # Performance Considerations
-///
-/// - The function is designed to handle large datasets, but its runtime is directly proportional
-///   to the number of replicates (`n_replicates`) and the size of the sequences. Adjust these
-///   parameters based on available computational resources.
-#[allow(clippy::too_many_arguments)]
+/// Returns an error if the progress bar or the protein aligner can't be built. Alignment
+/// failures inside a group are printed and stored as `NaN`.
 fn calculate_scores(
     groups: &DataFrame,
     all_unique_alpha: &[String],
@@ -518,76 +481,91 @@ fn calculate_scores(
     gap_open: i32,
     gap_extend: i32,
     patterns: &[String],
-    out_pattern: &mut Vec<String>,
-    out_self_a: &mut Vec<f64>,
-    out_self_b: &mut Vec<f64>,
-    out_frac: &mut Vec<f64>,
-    rng: &mut SmallRng,
-) -> Result<()> {
+    base_seed: u64,
+) -> Result<Vec<GroupScores>> {
     let height = groups.height();
-    let (pb, inner_pb) = dual_progress_bars(
-        height as u64,
-        Some(n_replicates as u64),
-        ProgressSettings::Position,
-        ProgressSettings::Position,
-        Progress::Progress,
-    )
-    .context("Failed to create dual progress bars in `calculate_scores`")?;
+    let pattern_at = |i: usize| patterns.get(i).map_or("", String::as_str);
 
+    // Measure progress in alignments rather than groups: group sizes vary so much that a
+    // groups-done count makes the ETA jump around.
+    let work: Vec<u64> = (0..height)
+        .into_par_iter()
+        .map(|i| {
+            group_work(
+                groups,
+                i,
+                pattern_at(i),
+                all_unique_alpha.len(),
+                n_replicates,
+            )
+        })
+        .collect();
+    let total_work: u64 = work.iter().sum();
+    let pb = progress_bar_with_message(0, "Calculating scores", ProgressSettings::Percent)
+        .context("Failed to create progress bar in `calculate_scores`")?;
+    pb.set_length(total_work);
+    pb.enable_steady_tick(std::time::Duration::from_secs(1));
+
+    // The aligner only holds the score matrix and penalties, and parasail's matrix is
+    // `Send + Sync`, so all threads share one.
     let aligner =
         build_protein_aligner(gap_open, gap_extend).context("Failed to build protein aligner")?;
-    pb.set_message("Calculating scores");
-    for i in 0..height {
-        let pattern = patterns.get(i).map_or("", |v| v);
-        if pattern == "single" {
-            pb.inc(1);
-            out_pattern.push(pattern.to_string());
-            out_self_a.push(f64::NAN);
-            out_self_b.push(f64::NAN);
-            out_frac.push(f64::NAN);
-            continue;
-        }
-        inner_pb.set_message(pattern.to_string());
-        let mut ctx = ScoreContext {
-            rng,
-            pb: &inner_pb,
-            aligner: &aligner,
-            pattern,
-        };
 
-        match get_list_cell_as_vec_utf8(groups, "TcRb", i) {
-            Err(_) => {
-                out_self_b.push(f64::NAN);
+    let scores = (0..height)
+        .into_par_iter()
+        .map(|i| {
+            let pattern = pattern_at(i);
+            if pattern == "single" {
+                return GroupScores::NAN;
             }
-            Ok(b_full) => {
-                let b_res = calculate_single_chain_score(&mut ctx, b_full);
-                out_self_b.push(b_res.self_mean);
-            }
-        }
+            let mut rng = SmallRng::seed_from_u64(base_seed.wrapping_add(i as u64));
+            let mut ctx = ScoreContext {
+                rng: &mut rng,
+                aligner: &aligner,
+                pattern,
+                pb: &pb,
+                done: 0,
+            };
+            let scores = score_group(&mut ctx, groups, i, all_unique_alpha, n_replicates);
+            // Report any alignments that were planned but skipped (e.g. after an error).
+            pb.inc(work[i].saturating_sub(ctx.done));
+            scores
+        })
+        .collect();
 
-        match get_list_cell_as_vec_utf8(groups, "TcRa", i) {
-            Err(_) => {
-                out_self_a.push(f64::NAN);
-                out_frac.push(f64::NAN);
-            }
-            Ok(a_full) => {
-                let a_res = calculate_single_chain_score(&mut ctx, a_full);
-                out_self_a.push(a_res.self_mean);
-                let final_value = calculate_single_chain_background_score(
-                    &mut ctx,
-                    all_unique_alpha,
-                    n_replicates,
-                    a_res,
-                );
-                out_frac.push(final_value);
-            }
-        }
+    pb.finish();
+    Ok(scores)
+}
 
-        inner_pb.reset();
-        out_pattern.push(pattern.to_string());
-        pb.inc(1);
+/// Scores the group in row `i` of `groups` (see `calculate_scores`).
+fn score_group(
+    ctx: &mut ScoreContext<'_>,
+    groups: &DataFrame,
+    i: usize,
+    all_unique_alpha: &[String],
+    n_replicates: usize,
+) -> GroupScores {
+    let self_b = match get_list_cell_as_vec_utf8(groups, "TcRb", i) {
+        Err(_) => f64::NAN,
+        Ok(b_full) => calculate_single_chain_score(ctx, b_full).self_mean,
+    };
+
+    let (self_a, frac) = match get_list_cell_as_vec_utf8(groups, "TcRa", i) {
+        Err(_) => (f64::NAN, f64::NAN),
+        Ok(a_full) => {
+            let a_res = calculate_single_chain_score(ctx, a_full);
+            let self_a = a_res.self_mean;
+            let frac =
+                calculate_single_chain_background_score(ctx, all_unique_alpha, n_replicates, a_res);
+            (self_a, frac)
+        }
+    };
+
+    GroupScores {
+        self_a,
+        self_b,
+        frac,
     }
-    Ok(())
 }
 
 struct SingleChainResult {
@@ -610,14 +588,16 @@ fn calculate_single_chain_score(
     ctx: &mut ScoreContext<'_>,
     all_seqs: Vec<String>,
 ) -> SingleChainResult {
-    let downsampled_sequences = downsample_vec(all_seqs, ctx.pattern, ctx.pb, ctx.rng);
+    let downsampled_sequences = downsample_vec(all_seqs, ctx.rng);
     let self_mean = if downsampled_sequences.len() <= 1 {
         f64::NAN
     } else {
-        run_parasail(ctx.aligner, &downsampled_sequences, None).unwrap_or_else(|e| {
+        let mean = run_parasail(ctx.aligner, &downsampled_sequences, None).unwrap_or_else(|e| {
             eprintln!("Error running parasail for pattern {}: {e}", ctx.pattern);
             f64::NAN
-        })
+        });
+        ctx.advance(pairs(downsampled_sequences.len()));
+        mean
     };
 
     SingleChainResult::new(downsampled_sequences, self_mean)
@@ -629,7 +609,8 @@ fn calculate_single_chain_background_score(
     n_replicates: usize,
     group_result: SingleChainResult,
 ) -> f64 {
-    let n_val = group_result.n_seqs.min(unique_seqs.len()).min(MAX_BG_SEQS);
+    let n_val = background_size(group_result.n_seqs, unique_seqs.len());
+    let replicate_work = pairs(n_val);
     let mut greater_count = 0usize;
     if group_result.n_seqs > 1 && n_val > 0 && !group_result.is_nan() {
         for _rep in 0..n_replicates {
@@ -646,7 +627,7 @@ fn calculate_single_chain_background_score(
             if group_result.self_mean < bg_mean {
                 greater_count += 1;
             }
-            ctx.pb.inc(1);
+            ctx.advance(replicate_work);
         }
     } else {
         greater_count = n_replicates;
@@ -742,9 +723,7 @@ mod tests {
     fn test_downsample_vec_limits(#[case] total: usize) {
         let v: Vec<String> = (0..total).map(|i| format!("S{}", i)).collect();
         let mut rng = SmallRng::from_seed([1; 32]);
-        let pb = ProgressBar::hidden();
-
-        let out = downsample_vec(v.clone(), "pat", &pb, &mut rng);
+        let out = downsample_vec(v.clone(), &mut rng);
         assert!(out.len() <= MAX_GROUP_SEQS);
         assert_eq!(out.len(), total.min(MAX_GROUP_SEQS));
     }
@@ -786,6 +765,45 @@ mod tests {
         assert!(tcra_score.is_nan());
         assert!(tcrb_score.is_nan());
         assert!(frac.is_nan());
+    }
+
+    #[test]
+    fn group_work_matches_alignments_reported_while_scoring() {
+        let df = df![
+            "pattern" => ["pat1", "pat2", "pat3"],
+            "TcRa" => [Some("ACDE;WQRT;MNPQ"), Some("ACDE"), None::<&str>],
+            "TcRb" => [Some("MNPQ;PQRS"), Some("PQRS;RSTV;VWYA"), Some("ACDE;WQRT")],
+            "index" => [1i64, 2, 3],
+        ]
+        .unwrap();
+        let all_alpha = all_unique_cdr3_alpha(&df).unwrap();
+        let groups = prepare_parasail_groups(&df).unwrap();
+        let aligner = build_protein_aligner(7, 1).unwrap();
+        let patterns: Vec<String> = groups
+            .column("pattern")
+            .unwrap()
+            .str()
+            .unwrap()
+            .iter()
+            .map(|p| p.unwrap_or_default().to_string())
+            .collect();
+        let n_replicates = 4;
+
+        for (i, pattern) in patterns.iter().enumerate() {
+            let expected = group_work(&groups, i, pattern, all_alpha.len(), n_replicates);
+            let pb = ProgressBar::hidden();
+            let mut rng = SmallRng::seed_from_u64(0);
+            let mut ctx = ScoreContext {
+                rng: &mut rng,
+                aligner: &aligner,
+                pattern,
+                pb: &pb,
+                done: 0,
+            };
+            score_group(&mut ctx, &groups, i, &all_alpha, n_replicates);
+            assert_eq!(ctx.done, expected, "pattern {pattern}");
+            assert!(expected > 0, "pattern {pattern}");
+        }
     }
 
     #[test]
@@ -942,7 +960,6 @@ mod tests {
         #[case] expected_self_mean: f64,
     ) {
         let mut rng = SmallRng::from_seed([7; 32]);
-        let pb = ProgressBar::hidden();
         let aligner = build_protein_aligner(7, 1).expect("aligner build");
         let downsampled_sequences: Vec<String> = downsampled_sequences
             .into_iter()
@@ -955,9 +972,10 @@ mod tests {
 
         let mut ctx = ScoreContext {
             rng: &mut rng,
-            pb: &pb,
             aligner: &aligner,
             pattern: "pat",
+            pb: &ProgressBar::hidden(),
+            done: 0,
         };
         let single_result = calculate_single_chain_score(&mut ctx, downsampled_sequences.clone());
         if expected_self_mean.is_nan() & single_result.is_nan() {
@@ -968,9 +986,10 @@ mod tests {
 
         let mut ctx = ScoreContext {
             rng: &mut rng,
-            pb: &pb,
             aligner: &aligner,
             pattern: "pat",
+            pb: &ProgressBar::hidden(),
+            done: 0,
         };
         let score = calculate_single_chain_background_score(
             &mut ctx,
@@ -992,7 +1011,6 @@ mod tests {
         #[case] expected: f64,
     ) {
         let mut rng = SmallRng::from_seed([9; 32]);
-        let pb = ProgressBar::hidden();
         let aligner = build_protein_aligner(-10, -1).expect("aligner build");
         let downsampled_sequences: Vec<String> = downsampled_sequences
             .into_iter()
@@ -1002,9 +1020,10 @@ mod tests {
 
         let mut ctx = ScoreContext {
             rng: &mut rng,
-            pb: &pb,
             aligner: &aligner,
             pattern: "pat",
+            pb: &ProgressBar::hidden(),
+            done: 0,
         };
         let single_result = SingleChainResult::new(downsampled_sequences.clone(), 1.23);
         let score = calculate_single_chain_background_score(
@@ -1020,16 +1039,16 @@ mod tests {
     #[test]
     fn test_calculate_single_chain_background_score_returns_minus_one_for_nan_self_mean() {
         let mut rng = SmallRng::from_seed([11; 32]);
-        let pb = ProgressBar::hidden();
         let aligner = build_protein_aligner(-10, -1).expect("aligner build");
         let downsampled_sequences = vec!["ACD".to_string(), "WQ".to_string()];
         let unique_seqs = vec!["ACD".to_string(), "WQ".to_string()];
 
         let mut ctx = ScoreContext {
             rng: &mut rng,
-            pb: &pb,
             aligner: &aligner,
             pattern: "pat",
+            pb: &ProgressBar::hidden(),
+            done: 0,
         };
         let single_result = SingleChainResult::new(downsampled_sequences.clone(), f64::NAN);
         let score =
