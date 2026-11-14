@@ -10,6 +10,7 @@ on:
       - 'v*'
   pull_request:
     branches: [ "main" ]
+  merge_group:
 
 env:
   RUSTFLAGS: "-Dwarnings"
@@ -47,7 +48,7 @@ jobs:
                 (.locations[ 0 ].physicalLocation.region.startLine // ""),
                 (.locations[ 0 ].physicalLocation.region.startColumn // "")
                 ] | join(":");
-          
+
             {
               "$schema": (.[0]."$schema"),
               version: (.[0].version),

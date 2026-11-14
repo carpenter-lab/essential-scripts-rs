@@ -2,7 +2,6 @@ use anyhow::Result;
 use clap::Subcommand;
 use std::path::PathBuf;
 
-#[cfg(feature = "base_cmd")]
 mod core;
 
 #[derive(Subcommand)]
@@ -12,7 +11,6 @@ pub enum Commands {
     /// Splits the `subject:condition` column (the default) into two columns.
     /// Can be used on any file with a separator to split by however,
     /// these columns will always be called subject and condition
-    #[command(about, long_about)]
     SplitSampleId {
         #[arg(required = true, num_args = 1.., help = "Input CSV file to process")]
         input_file: PathBuf,
@@ -40,7 +38,6 @@ pub enum Commands {
     /// The TCR columns must be named CDR3a and CDR3b.
     /// Requires either CTgeneA/CTgeneB columns or TRAV/TRAJ/TRBV/TRBJ columns for the TCR genes.
     /// If group columns are not provided, each input row is treated as its own group and alpha/beta splits are anchored to original rows.
-    #[command(about, long_about)]
     SplitCdr3Seq {
         #[arg(required = true, help = "Input CSV file to process")]
         input_file: PathBuf,
@@ -58,7 +55,6 @@ pub enum Commands {
     },
 }
 
-#[cfg(feature = "base_cmd")]
 pub fn handle_command(cmd: Commands) -> Result<()> {
     match cmd {
         Commands::SplitSampleId {
@@ -66,18 +62,13 @@ pub fn handle_command(cmd: Commands) -> Result<()> {
             output_file,
             column_name,
         } => {
-            #[cfg(feature = "base_cmd")]
             core::split_sample_id(input_file, output_file, &column_name)?;
         }
         Commands::SplitCdr3Seq {
             input_file,
             output_file,
             group,
-        } =>
-        {
-            #[cfg(feature = "base_cmd")]
-            core::split_cdr3_seq_main(input_file, output_file, group.as_ref())?
-        }
+        } => core::split_cdr3_seq_main(input_file, output_file, group.as_ref())?,
     }
     Ok(())
 }

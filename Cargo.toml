@@ -9,31 +9,39 @@ categories = ["command-line-utilities", "science::bioinformatics"]
 
 [dependencies]
 clap = { version = "4.6", features = ["derive", "wrap_help", "string", "env"] }
-indicatif = { version = "0.18", optional = true }
+indicatif = { version = "0.18", features = ["rayon"] }
 rand = { version = "0.10", optional = true }
 parasail-rs = { version = "0.9", optional = true }
-calamine = { version = "0.36", optional = true }
-tokio = { version = "1.52", features = ["full"], optional = true }
-regex = { version = "1.12", optional = true }
-md5 = { version = "0.8", optional = true }
-walkdir = { version = "2.5", optional = true }
-rayon = { version = "1.12", optional = true }
-num_cpus = { version = "1.17", optional = true }
-reqwest = { version = "0.13", features = ["json", "form", "multipart", "blocking"], optional = true }
-serde = { version = "1.0", features = ["derive"], optional = true }
+calamine = "0.38"
+tokio = { version = "1.52", features = ["full"] }
+regex = "1.12"
+md5 = "0.8"
+walkdir = "2.5"
+rayon = "1.12"
+num_cpus = "1.17"
+reqwest = { version = "0.13", features = ["json", "form", "multipart", "blocking"] }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", optional = true }
-urlencoding = { version = "2.1", optional = true }
-anyhow = { version = "1.0", optional = true }
+urlencoding = "2.1"
+anyhow = "1.0"
+csv = "1.4"
+rdstream = { version = "0.1", default-features = false }
 plotters-cairo = { version = "0.9", optional = true }
 cairo-rs = { version = "0.22", optional = true, features = ["pdf"] }
 clap-binary-enum = "0.1"
 clap-markdown = "0.1"
-thiserror = "2.0.18"
+thiserror = "2.0"
+rust-igraph = "0.7"
+rustc-hash = "2.1"
+# `enrichment` turns these features on through glib and png. Enabling them always keeps the
+# resolved features of shared dependencies identical with and without it, so CI's default-feature
+# test run reuses the all-features build instead of recompiling polars and the network stack.
+smallvec = { version = "1", features = ["union"] }
+simd-adler32 = { version = "0.3", features = ["const-generics"] }
 
 [dependencies.polars]
 version = "0.55"
 features = ["lazy", "strings", "concat_str", "timezones", "dtype-array"]
-optional = true
 
 [dependencies.plotters]
 version = "0.3.7"
@@ -42,23 +50,27 @@ default-features = false
 features = ["svg_backend", "bitmap_backend", "ttf", "bitmap_encoder"]
 
 [features]
-default = ["base_cmd"]
-enrichment = ["dep:reqwest", "dep:serde", "dep:serde_json", "dep:plotters", "dep:plotters-cairo", "dep:cairo-rs"]
-tcr = ["dep:parasail-rs", "dep:rand", "dep:rayon"]
-base_cmd = ["dep:indicatif", "dep:regex", "dep:md5", "dep:walkdir", "dep:rayon", "dep:calamine", "dep:tokio", "dep:polars", "dep:num_cpus", "dep:reqwest", "dep:serde", "dep:urlencoding", "dep:anyhow"]
+enrichment = ["dep:serde_json", "dep:plotters", "dep:plotters-cairo", "dep:cairo-rs"]
+tcr = ["dep:parasail-rs", "dep:rand"]
 
 [profile.release]
 opt-level = 3
 strip = "debuginfo"
 lto = "thin"
 
+[profile.profiler]
+inherits = "release"
+debug = true
+strip = "none"
+
 [profile.release.package."*"]
 opt-level = 3
+
 
 [dev-dependencies]
 polars-testing = "0.55"
 pretty_assertions = "1.4"
-rstest = "0.27"
+rstest = "0.28"
 tempfile = "3.27"
 assert_cmd = "2.2"
 rstest_reuse = "0.7"

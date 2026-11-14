@@ -1,6 +1,7 @@
 use anyhow::{Context as AnyhowContext, Result};
 use calamine::{Reader, Xlsx, open_workbook};
 use polars::prelude::*;
+use std::io::{BufRead, BufReader, Cursor, Read};
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -182,30 +183,23 @@ pub fn read_from_tsv(input_file: PathBuf) -> Result<LazyFrame> {
 ///
 /// # Parameters
 /// - `input_file`: A `PathBuf` representing the path to the input file that is to be read.
-/// - `separator`: An `Option<u8>` representing the optional byte separator to specify the file format:
-///   - `Some(b'\t')`: Treat the file as a tab-separated values (TSV) file.
-///   - `Some(b',')`: Treat the file as a comma-separated values (CSV) file.
-///   - Any other `Some` value will result in a panic indicating an unsupported separator.
-///   - `None`: Automatically detect the file format based on its extension.
+/// - `separator`: An `Option<u8>` representing the optional field separator:
+///   - `Some(sep)`: Read the file as delimited text using `sep`, skipping detection.
+///   - `None`: Detect the format from the file's extension and content.
 ///
 /// # Behavior
-/// - If `separator` is provided:
-///   - Handles TSV files for a tab (`\t`) separator.
-///   - Handles CSV files for a comma (`,`) separator.
-///   - Panics if an unsupported separator is provided.
+/// - If `separator` is provided, the file is read as delimited text with that separator.
 /// - If `separator` is not provided:
-///   - Determines the file format based on the file's extension:
-///     - `"tsv"`: Reads the file as a TSV file.
-///     - `"xls"`/`"xlsx"`: Reads the file as an Excel file (**Note**: The `read_excel` function expects the following parameters: no sheet name, sheet index `0`, and no additional options).
-///     - Any other or unknown extension: Reads the file as a CSV file.
-///   - Defaults to reading the file as TSV if no extension is found.
+///   - `"xls"`/`"xlsx"`: Reads the file as an Excel file (first sheet, no skipped rows).
+///   - Otherwise the separator is guessed from the first lines of the file (see
+///     [`guess_separator`]). If guessing is inconclusive, it falls back to tab for
+///     `"tsv"` files or files without an extension, and comma for everything else.
 ///
 /// # Returns
 /// - A `LazyFrame` generated from the data in the file, ready for further manipulation.
 ///
-/// # Panics
-/// - Panics if the separator provided is unsupported.
-/// - Panics if the Excel file reading fails.
+/// # Errors
+/// - Returns an error if the file cannot be opened or parsed.
 ///
 /// # Examples
 /// ```no_run
@@ -222,21 +216,128 @@ pub fn read_from_tsv(input_file: PathBuf) -> Result<LazyFrame> {
 /// let lazy_frame = read_from_file(input_path, None);
 /// ```
 pub fn read_from_file(input_file: PathBuf, separator: Option<u8>) -> Result<LazyFrame> {
-    match separator {
-        Some(sep) => match sep {
-            b'\t' => read_from_tsv(input_file),
-            b',' => read_from_csv(input_file),
-            _ => panic!("Unsupported separator"),
-        },
-        _ => match get_extension_from_filename(&input_file) {
-            Some(v) => match v {
-                "tsv" => read_from_tsv(input_file),
-                "xls" | "xlsx" => Ok(read_excel(&input_file, None, 0, None)?.lazy()),
-                _ => read_from_csv(input_file),
-            },
-            None => read_from_tsv(input_file),
-        },
+    if input_file == Path::new("-") {
+        return read_from_reader(std::io::stdin().lock(), separator)
+            .context("Failed to read from stdin");
     }
+    if let Some(sep) = separator {
+        return read_delimited(input_file, sep);
+    }
+    match get_extension_from_filename(&input_file) {
+        Some("xls" | "xlsx") => Ok(read_excel(&input_file, None, 0, None)?.lazy()),
+        ext => {
+            let fallback = if matches!(ext, None | Some("tsv")) {
+                b'\t'
+            } else {
+                b','
+            };
+            let sep = guess_separator(&input_file)?.unwrap_or(fallback);
+            read_delimited(input_file, sep)
+        }
+    }
+}
+
+const CANDIDATE_SEPARATORS: [u8; 4] = *b"\t,;|";
+const SEP_GUESS_LINES: usize = 20;
+
+/// Guesses the field separator of a delimited text file from its first lines.
+///
+/// Each candidate in [`CANDIDATE_SEPARATORS`] is counted on every sampled line,
+/// ignoring occurrences inside double quotes. A candidate qualifies when it occurs
+/// the same, non-zero number of times on every line; among those, the one yielding
+/// the most fields wins.
+///
+/// # Returns
+/// - `Ok(Some(sep))` when a separator was detected.
+/// - `Ok(None)` when the file is empty or no candidate occurs consistently
+///   (e.g. a single-column file).
+///
+/// # Errors
+/// - Returns an error if the file cannot be opened or read.
+pub fn guess_separator(path: &Path) -> Result<Option<u8>> {
+    let file = AnyhowContext::with_context(std::fs::File::open(path), || {
+        format!("Failed to open {}", path.display())
+    })?;
+    Ok(guess_separator_from_reader(BufReader::new(file))?)
+}
+
+/// Reads delimited text from any reader (e.g. stdin) into a `LazyFrame`.
+///
+/// The whole input is buffered in memory, since a stream can only be read once.
+/// With `separator` set to `None`, the separator is guessed from the content
+/// (see [`guess_separator`]) and defaults to tab when that is inconclusive.
+///
+/// # Errors
+/// - Returns an error if the input cannot be read or parsed.
+pub fn read_from_reader(mut reader: impl Read, separator: Option<u8>) -> Result<LazyFrame> {
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+    let sep = match separator {
+        Some(sep) => sep,
+        None => guess_separator_from_reader(bytes.as_slice())?.unwrap_or(b'\t'),
+    };
+    let df = CsvReadOptions::default()
+        .with_parse_options(CsvParseOptions::default().with_separator(sep))
+        .into_reader_with_file_handle(Cursor::new(bytes))
+        .finish()?;
+    Ok(df.lazy())
+}
+
+/// Content-based separator detection shared by [`guess_separator`] and
+/// [`read_from_reader`]. Only the first [`SEP_GUESS_LINES`] lines are consumed.
+fn guess_separator_from_reader(reader: impl BufRead) -> std::io::Result<Option<u8>> {
+    let lines: Vec<Vec<u8>> = reader
+        .split(b'\n')
+        .take(SEP_GUESS_LINES)
+        .collect::<std::io::Result<_>>()?;
+    let lines: Vec<&[u8]> = lines
+        .iter()
+        .map(|l| l.strip_suffix(b"\r").unwrap_or(l))
+        .filter(|l| !l.is_empty())
+        .collect();
+    let Some(first) = lines.first() else {
+        return Ok(None);
+    };
+
+    let count = |line: &[u8], sep: u8| {
+        let mut in_quotes = false;
+        line.iter()
+            .filter(|&&b| {
+                if b == b'"' {
+                    in_quotes = !in_quotes;
+                }
+                !in_quotes && b == sep
+            })
+            .count()
+    };
+
+    Ok(CANDIDATE_SEPARATORS
+        .iter()
+        .copied()
+        .filter_map(|sep| {
+            let n = count(first, sep);
+            (n > 0 && lines.iter().all(|l| count(l, sep) == n)).then_some((sep, n))
+        })
+        .max_by_key(|&(_, n)| n)
+        .map(|(sep, _)| sep))
+}
+
+/// Reads a delimited text file with the given separator into a `LazyFrame`.
+///
+/// # Errors
+/// - Returns an error if the file cannot be read or parsed.
+pub fn read_delimited(input_file: PathBuf, separator: u8) -> Result<LazyFrame> {
+    AnyhowContext::with_context(
+        LazyCsvReader::new(PlRefPath::try_from_pathbuf(input_file.clone())?)
+            .with_separator(separator)
+            .finish(),
+        || {
+            format!(
+                "Failed to read delimited file: {}",
+                input_file.to_string_lossy()
+            )
+        },
+    )
 }
 
 #[must_use]
@@ -445,7 +546,18 @@ mod tests {
     #[case::parse_tsv_no_ext(None, "a\tb\n1\t2\n", None)]
     fn file_case_template(#[case] sep: Option<u8>, #[case] text: &str, #[case] ext: Option<&str>) {}
 
-    #[apply(file_case_template)]
+    #[rstest]
+    #[case::parse_csv(Some(b','), "a,b\n1,2\n", Some("csv"))]
+    #[case::parse_tsv(Some(b'\t'), "a\tb\n1\t2\n", Some("tsv"))]
+    #[case::parse_tsv_default_sep(None, "a\tb\n1\t2\n", Some("tsv"))]
+    #[case::parse_tsv_no_ext(None, "a\tb\n1\t2\n", None)]
+    #[case::explicit_semicolon(Some(b';'), "a;b\n1;2\n", Some("csv"))]
+    #[case::guess_tabs_in_csv(None, "a\tb\n1\t2\n", Some("csv"))]
+    #[case::guess_commas_in_tsv(None, "a,b\n1,2\n", Some("tsv"))]
+    #[case::guess_semicolon_txt(None, "a;b\n1;2\n", Some("txt"))]
+    #[case::guess_pipe_no_ext(None, "a|b\n1|2\n", None)]
+    #[case::guess_crlf(None, "a\tb\r\n1\t2\r\n", Some("csv"))]
+    #[case::guess_ignores_quoted(None, "a\tb\n\"x,y,z\"\t2\n", Some("csv"))]
     fn read_from_file_with_sep(
         #[case] sep: Option<u8>,
         #[case] text: &str,
@@ -462,6 +574,49 @@ mod tests {
         assert_eq!(df.shape(), (1, 2));
         assert_eq!(df.get_column_names()[0].as_str(), "a");
         assert_eq!(df.get_column_names()[1].as_str(), "b");
+    }
+
+    #[rstest]
+    #[case::single_column(Some("csv"), "a\n1\n2\n", None)]
+    #[case::empty(Some("csv"), "", None)]
+    #[case::inconsistent_counts(Some("csv"), "a,b\n1,2,3\n", None)]
+    #[case::prefers_most_fields(Some("txt"), "a;b,c;d\n1;2,3;4\n", Some(b';'))]
+    fn guess_separator_cases(
+        #[case] ext: Option<&str>,
+        #[case] text: &str,
+        #[case] expected: Option<u8>,
+    ) {
+        let temp = TempDir::default();
+        let path = temp
+            .with_file_name(get_timestamp())
+            .with_extension(ext.unwrap_or(""));
+        write_text_file(&path, text);
+
+        assert_eq!(guess_separator(&path).unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::guess_comma(None, "a,b\n1,2\n")]
+    #[case::guess_semicolon(None, "a;b\n1;2\n")]
+    #[case::fallback_tab(None, "a\tb\n1\t2\n")]
+    #[case::explicit_sep(Some(b'|'), "a|b\n1|2\n")]
+    fn read_from_reader_cases(#[case] sep: Option<u8>, #[case] text: &str) {
+        let df = collect_df(read_from_reader(text.as_bytes(), sep).unwrap());
+
+        assert_eq!(df.shape(), (1, 2));
+        assert_eq!(df.get_column_names()[0].as_str(), "a");
+        assert_eq!(df.get_column_names()[1].as_str(), "b");
+    }
+
+    #[rstest]
+    fn read_from_reader_reads_past_guessed_lines() {
+        let text: String = std::iter::once("a,b\n".to_string())
+            .chain((0..100).map(|i| format!("{i},{i}\n")))
+            .collect();
+
+        let df = collect_df(read_from_reader(text.as_bytes(), None).unwrap());
+
+        assert_eq!(df.shape(), (100, 2));
     }
 
     #[apply(file_case_template)]

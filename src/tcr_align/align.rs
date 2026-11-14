@@ -83,6 +83,7 @@ pub fn build_protein_aligner(gap_open: i32, gap_extend: i32) -> PolarsResult<Ali
         .matrix(matrix)
         .gap_open(gap_open)
         .gap_extend(gap_extend)
+        .solution_width(16)
         .build())
 }
 
@@ -154,29 +155,12 @@ pub fn run_parasail<S: AsRef<str> + Sync>(
     let (sum, n) = (0..a.len())
         .into_par_iter()
         .map(|i| {
-            let q_bytes = a[i].as_ref().as_bytes();
-            let targets: &[S] = match reference {
+            let refs: &[S] = match reference {
                 Some(b) => b,
                 None => &a[i + 1..],
             };
-            if targets.is_empty() {
-                return Ok((0, 0));
-            }
-            let mut row_sum: i64 = 0;
-            match profile_aligner(aligner, q_bytes)? {
-                // Fast path: the query profile is built once and reused for every target.
-                Some(row_aligner) => {
-                    for target in targets {
-                        row_sum += run_parsail_inner(&row_aligner, None, target)?;
-                    }
-                }
-                None => {
-                    for target in targets {
-                        row_sum += run_parsail_inner(aligner, Some(q_bytes), target)?;
-                    }
-                }
-            }
-            Ok::<_, PolarsError>((row_sum, targets.len() as i64))
+            let row_sum = sum_scores_for_query(aligner, a[i].as_ref().as_bytes(), refs)?;
+            Ok::<_, PolarsError>((row_sum, refs.len() as i64))
         })
         .try_reduce(|| (0, 0), |(s1, n1), (s2, n2)| Ok((s1 + s2, n1 + n2)))?;
 
@@ -187,42 +171,50 @@ pub fn run_parasail<S: AsRef<str> + Sync>(
     })
 }
 
-/// Builds a global aligner bound to a precomputed query profile, sharing the gap penalties
-/// of `base`. Without a profile, parasail rebuilds the query profile (and allocates) on every
-/// alignment call; reusing it across a row of targets avoids that work and the allocator
-/// contention it causes when running in parallel.
-///
-/// Returns `None` for an empty query, which parasail cannot profile; callers then fall back to
-/// the profile-less `base` aligner so behaviour matches the original implementation.
-///
-/// Note: this always builds a *global* aligner, matching [`build_protein_aligner`].
-fn profile_aligner(base: &Aligner, query_bytes: &[u8]) -> PolarsResult<Option<Aligner>> {
-    if query_bytes.is_empty() {
-        return Ok(None);
-    }
-    let profile = Profile::new(query_bytes, false, &base.matrix).map_err(|e| {
-        PolarsError::ComputeError(format!("failed to build parasail query profile: {e}").into())
-    })?;
-    Ok(Some(
-        Aligner::new()
-            .global()
-            .gap_open(base.gap_open)
-            .gap_extend(base.gap_extend)
-            .profile(profile)
-            .build(),
-    ))
-}
+/// Minimum number of references a query must be aligned against before a query
+/// profile is built for it. Building a profile (and the profile-specific aligner)
+/// has a fixed cost, so for very short rows the plain per-call alignment is cheaper.
+const MIN_REFS_FOR_PROFILE: usize = 8;
 
-fn run_parsail_inner<S: AsRef<str>>(
+/// Sums the global alignment scores of `query` against every sequence in `refs`.
+///
+/// When there are enough references, the query's SIMD profile is built once and
+/// reused for every alignment instead of being rebuilt on each `align` call.
+/// The profiled aligner is always global, matching `build_protein_aligner`.
+fn sum_scores_for_query<S: AsRef<str>>(
     aligner: &Aligner,
-    query_bytes: Option<&[u8]>,
-    item: &S,
-) -> Result<i64, PolarsError> {
-    let r_bytes = item.as_ref().as_bytes();
-    let result = aligner
-        .align(query_bytes, r_bytes)
-        .map_err(|e| PolarsError::ComputeError(format!("parasail align failed: {e}").into()))?;
-    Ok(i64::from(result.get_score()))
+    query: &[u8],
+    refs: &[S],
+) -> PolarsResult<i64> {
+    let map_err = |e: parasail_rs::error::Error| {
+        PolarsError::ComputeError(format!("parasail align failed: {e}").into())
+    };
+
+    let mut sum: i64 = 0;
+    // Parasail cannot build a profile for an empty query, so it takes the per-call path.
+    if !query.is_empty() && refs.len() >= MIN_REFS_FOR_PROFILE {
+        let profile = Profile::new(query, false, &aligner.matrix).map_err(map_err)?;
+        let profiled = Aligner::new()
+            .global()
+            .gap_open(aligner.gap_open)
+            .gap_extend(aligner.gap_extend)
+            .profile(profile)
+            .build();
+        for r in refs {
+            let result = profiled
+                .align(None, r.as_ref().as_bytes())
+                .map_err(map_err)?;
+            sum += i64::from(result.get_score());
+        }
+    } else {
+        for r in refs {
+            let result = aligner
+                .align(Some(query), r.as_ref().as_bytes())
+                .map_err(map_err)?;
+            sum += i64::from(result.get_score());
+        }
+    }
+    Ok(sum)
 }
 
 #[cfg(test)]
@@ -305,6 +297,23 @@ mod tests {
         Some(vec!["ACD", "WQ", "MN"])
     )]
     #[case::within_query_only(vec!["ACD", "WQ", "MN"], None)]
+    // Enough sequences per row to exercise the query-profile path.
+    #[case::profile_within_query(
+        vec![
+            "CASSLGQAYEQYF", "CASSPGTGNTEAFF", "CAWSVGQGYEQYF", "CASSLEGNQPQHF",
+            "CASRPGLAGGRPEQYF", "CASSQDRGNYGYTF", "CSARDRTGNGYTF", "CASSIRSSYEQYF",
+            "CASSYSGGSYNEQFF", "CASSLAPGATNEKLFF", "CAVRDSNYQLIW",
+        ],
+        None
+    )]
+    #[case::profile_with_reference(
+        vec!["CASSLGQAYEQYF", "CAVRDSNYQLIW"],
+        Some(vec![
+            "CASSPGTGNTEAFF", "CAWSVGQGYEQYF", "CASSLEGNQPQHF", "CASRPGLAGGRPEQYF",
+            "CASSQDRGNYGYTF", "CSARDRTGNGYTF", "CASSIRSSYEQYF", "CASSYSGGSYNEQFF",
+            "CASSLAPGATNEKLFF",
+        ])
+    )]
     fn mean_matches_manual_calculation(
         #[from(protein_aligner)] aligner: Aligner,
         #[case] query: Vec<&str>,
